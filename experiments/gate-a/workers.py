@@ -25,10 +25,22 @@ class StubWorker:
 
     def __init__(self, auto_prepare: bool = False):
         self.auto_prepare = auto_prepare
-        self._candidates: dict[tuple[str, str], WorkerCandidate] = {}
+        self._candidates: dict[tuple[str, str, str, str, str, str, str], WorkerCandidate] = {}
+
+    @staticmethod
+    def _candidate_key(candidate: WorkerCandidate) -> tuple[str, str, str, str, str, str, str]:
+        return (
+            candidate.playthrough_id,
+            candidate.item_id,
+            candidate.acquisition_id,
+            candidate.input_hash,
+            candidate.investigation_version,
+            candidate.adapter_version,
+            candidate.validation_policy_version,
+        )
 
     def offer(self, candidate: WorkerCandidate) -> None:
-        self._candidates[(candidate.playthrough_id, candidate.item_id)] = candidate
+        self._candidates[self._candidate_key(candidate)] = candidate
 
     def get_candidate(
         self,
@@ -37,7 +49,16 @@ class StubWorker:
         acquisition: Mapping[str, Any],
         versions: Mapping[str, str],
     ) -> WorkerCandidate | None:
-        candidate = self._candidates.get((playthrough_id, item_id))
+        key = (
+            playthrough_id,
+            item_id,
+            str(acquisition["acquisition_id"]),
+            str(acquisition["input_hash"]),
+            versions["investigation_version"],
+            versions["adapter_version"],
+            versions["validation_policy_version"],
+        )
+        candidate = self._candidates.get(key)
         if candidate is not None or not self.auto_prepare:
             return candidate
         if acquisition["kind"] == "point":

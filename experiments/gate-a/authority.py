@@ -23,6 +23,37 @@ FIXTURE_VERSIONS = {
     "investigation_version": "fixture-investigation-v1",
     "validation_policy_version": "fixture-validation-v1",
 }
+FIXTURE_INVESTIGATIONS = {
+    "A": {"kind": "point", "capability": "supported", "capture_at_ms": 5000, "processing_at_ms": 6000, "eligible_at_ms": 8000, "release_policy": "automatic", "release_at_ms": 8000},
+    "B": {"kind": "point", "capability": "supported", "capture_at_ms": 5000, "processing_at_ms": 6000, "eligible_at_ms": 8000, "release_policy": "automatic", "release_at_ms": 8000, "cancel_before_ms": 6000},
+    "T": {"kind": "trace", "capability": "supported", "capture_at_ms": 4999, "sample_offsets_ms": [0, 1, 2], "processing_at_ms": 6000, "eligible_at_ms": 8000, "release_policy": "manual", "assessment": {"status": "available", "supported_assertions": ["DX-A is supported by the trace step under Fixture-A rules"], "evidence": ["trace samples at offsets 0, 1, and 2 ms"], "uncertainty": "limited to the fictional fixture rubric"}},
+    "C": {"kind": "point", "capability": "supported", "capture_at_ms": 11000, "processing_at_ms": 12000, "eligible_at_ms": 13000, "release_policy": "automatic", "release_at_ms": 13000},
+    "N": {"kind": "point", "capability": "unavailable", "cause": "unavailable_in_context"},
+}
+WORKER_FAILURE_CAUSES = {"solver_timeout", "worker_timeout", "worker_unavailable", "technical_error"}
+
+
+def _valid_command_envelope(actor: Any, command: Any) -> bool:
+    if not isinstance(actor, Actor) or not isinstance(command, Command):
+        return False
+    if not isinstance(actor.actor_id, str) or not actor.actor_id or not isinstance(actor.role, str):
+        return False
+    if not isinstance(command.command_id, str) or not command.command_id or len(command.command_id) > 128:
+        return False
+    if not isinstance(command.target_id, str) or not command.target_id or len(command.target_id) > 256:
+        return False
+    if not isinstance(command.kind, str) or not command.kind:
+        return False
+    revision = command.expected_revision
+    if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
+        return False
+    if not isinstance(command.payload, Mapping):
+        return False
+    try:
+        _canonical_json(dict(command.payload))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _empty_state() -> dict[str, Any]:
@@ -109,8 +140,12 @@ class SQLiteAuthority:
 
     def execute(self, actor: Actor, command: Command) -> Receipt:
         """Authorize, deduplicate, revise and commit a single command atomically."""
-        connection = self._connect()
+        target_id = command.target_id if isinstance(command, Command) and isinstance(command.target_id, str) else ""
+        if not _valid_command_envelope(actor, command):
+            return Receipt("invalid_command", target_id)
+        connection: sqlite3.Connection | None = None
         try:
+            connection = self._connect()
             connection.execute("BEGIN IMMEDIATE")
             state = self._load_state(connection)
 
@@ -184,15 +219,20 @@ class SQLiteAuthority:
             connection.commit()
             return receipt
         except ScheduleError:
-            if connection.in_transaction:
+            if connection is not None and connection.in_transaction:
                 connection.rollback()
             return Receipt("invalid_schedule", command.target_id)
         except sqlite3.Error:
-            if connection.in_transaction:
+            if connection is not None and connection.in_transaction:
                 connection.rollback()
             return Receipt("storage_failed", command.target_id)
+        except (TypeError, ValueError, KeyError, AttributeError):
+            if connection is not None and connection.in_transaction:
+                connection.rollback()
+            return Receipt("invalid_command", command.target_id)
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
 
     @staticmethod
     def _current_revision(state: Mapping[str, Any], target_id: str) -> int:
@@ -217,8 +257,10 @@ class SQLiteAuthority:
         play = state["plays"].get(command.target_id)
         if play is None:
             return False
-        if actor.role == "authority" and command.kind in {"release_result"}:
-            return True
+        if command.kind in {"release_result", "record_processing_failure"}:
+            return actor.role == "authority"
+        if actor.role == "authority":
+            return False
         return actor.role == "learner" and actor.actor_id == play["owner_id"]
 
     def _dispatch(
@@ -244,6 +286,8 @@ class SQLiteAuthority:
             return self._cancel_order(play, command)
         if command.kind == "release_result":
             return self._release_result(play, command)
+        if command.kind == "record_processing_failure":
+            return self._record_processing_failure(play, command)
         if command.kind == "submit_diagnosis":
             return self._submit_diagnosis(play, command)
         if command.kind == "open_artifact":
@@ -261,10 +305,11 @@ class SQLiteAuthority:
     def _generate_case(
         self, state: dict[str, Any], command: Command
     ) -> tuple[Receipt, bool]:
-        case_id = str(command.payload.get("case_id", ""))
-        if not case_id:
+        case_id = command.payload.get("case_id", "")
+        mandatory_evidence = command.payload.get("mandatory_evidence")
+        if not isinstance(case_id, str) or not case_id or not isinstance(mandatory_evidence, bool):
             return Receipt("invalid_command", command.target_id), False
-        if not command.payload.get("mandatory_evidence", False):
+        if not mandatory_evidence:
             state["generation_attempts"] = state.get("generation_attempts", []) + [
                 {"case_id": case_id, "status": "generation_failed", "reason": "mandatory_evidence_missing"}
             ]
@@ -291,6 +336,7 @@ class SQLiteAuthority:
             "reference_key": ["DX-A"],
             "reference_differential": ["DX-A", "DX-B"],
             "valid_alternatives": ["DX-B"],
+            "investigations": json.loads(_canonical_json(FIXTURE_INVESTIGATIONS)),
             "dialogue_mode": "luna_required",
             "dialogue_facts": [
                 {
@@ -330,8 +376,14 @@ class SQLiteAuthority:
         self, state: dict[str, Any], actor: Actor, command: Command
     ) -> tuple[Receipt, bool]:
         case_id = command.target_id.removeprefix("case:")
-        playthrough_id = str(command.payload.get("playthrough_id", ""))
-        if not playthrough_id or case_id not in state["cases"]:
+        playthrough_id = command.payload.get("playthrough_id", "")
+        if (
+            not isinstance(playthrough_id, str)
+            or not playthrough_id
+            or playthrough_id == "catalog"
+            or playthrough_id.startswith("case:")
+            or case_id not in state["cases"]
+        ):
             return Receipt("invalid_command", command.target_id), False
         if state["cases"][case_id].get("dialogue_mode", "luna_required") == "canned_only":
             return Receipt("legacy_case_not_playable", command.target_id), False
@@ -378,7 +430,7 @@ class SQLiteAuthority:
                 transition["time_ms"],
                 1,
                 "disease_transition",
-                playthrough_id,
+                f"case-state:{playthrough_id}",
                 {"x": transition["x"]},
             )
         self._update_continuation(play)
@@ -394,22 +446,35 @@ class SQLiteAuthority:
         items = command.payload.get("items")
         if not isinstance(items, list) or not items:
             return Receipt("invalid_command", command.target_id, play["revision"]), False
-        new_items: list[tuple[str, str, str]] = []
+        investigations = play["_private_case"].get("investigations", {})
+        new_items: list[tuple[str, str, Mapping[str, Any] | None, str]] = []
         for item in items:
             if not isinstance(item, dict):
                 return Receipt("invalid_command", command.target_id, play["revision"]), False
             item_id, kind = item.get("item_id"), item.get("kind")
-            capability = item.get("capability", "supported")
-            if not isinstance(item_id, str) or kind not in {"point", "trace"}:
-                return Receipt("unsupported", command.target_id, play["revision"]), False
-            if capability not in {"supported", "unsupported", "unavailable"}:
+            if "capability" in item or not set(item).issubset({"item_id", "kind"}):
                 return Receipt("invalid_command", command.target_id, play["revision"]), False
-            if item_id in play["orders"] or any(item_id == seen_id for seen_id, _, _ in new_items):
+            if (
+                not isinstance(item_id, str)
+                or not item_id.strip()
+                or not isinstance(kind, str)
+                or kind not in {"point", "trace"}
+            ):
+                return Receipt("invalid_command", command.target_id, play["revision"]), False
+            if item_id in play["orders"] or any(item_id == seen_id for seen_id, _, _, _ in new_items):
                 return Receipt("item_exists", command.target_id, play["revision"]), False
-            new_items.append((item_id, kind, capability))
+            definition = investigations.get(item_id)
+            if definition is not None and kind != definition["kind"]:
+                return Receipt("investigation_mismatch", command.target_id, play["revision"]), False
+            capability = "unsupported" if definition is None else definition["capability"]
+            if capability == "supported":
+                first_time = int(definition["capture_at_ms"])
+                if first_time < play["elapsed_ms"]:
+                    return Receipt("acquisition_window_closed", command.target_id, play["revision"]), False
+            new_items.append((item_id, kind, definition, capability))
 
         order_time = play["elapsed_ms"]
-        for item_id, kind, capability in new_items:
+        for item_id, kind, definition, capability in new_items:
             order = {
                 "item_id": item_id,
                 "kind": kind,
@@ -417,19 +482,18 @@ class SQLiteAuthority:
                 "ordered_at_ms": order_time,
                 "acquisition_id": None,
                 "acquisition_ids": [],
-                "eligible_at_ms": 8000 if item_id == "T" else None,
+                "capture_at_ms": None if definition is None else definition.get("capture_at_ms"),
+                "eligible_at_ms": None if definition is None else definition.get("eligible_at_ms"),
                 "failure_cause": None,
-                "release_at_ms": None,
+                "release_at_ms": None if definition is None else definition.get("release_at_ms"),
+                "release_policy": "none" if definition is None else definition.get("release_policy", "none"),
+                "cancel_before_ms": None if definition is None else definition.get("cancel_before_ms"),
+                "capability": capability,
                 "result": None,
                 **FIXTURE_VERSIONS,
             }
-            if capability in {"unsupported", "unavailable"}:
-                order["status"] = capability
-                order["failure_cause"] = (
-                    "no_registered_capability"
-                    if capability == "unsupported"
-                    else "unavailable_in_context"
-                )
+            if definition is not None and definition.get("assessment") is not None:
+                order["assessment_template"] = dict(definition["assessment"])
             play["orders"][item_id] = order
             self._append_event(
                 play,
@@ -437,36 +501,40 @@ class SQLiteAuthority:
                 phase=2,
                 kind="order_placed",
                 subject_id=item_id,
-                payload={"kind": kind, "investigation_version": order["investigation_version"]},
+                payload={"kind": kind, "investigation_version": order["investigation_version"], "capability": capability},
             )
-            if capability in {"unsupported", "unavailable"}:
-                self._append_event(
+        for item_id, kind, definition, capability in new_items:
+            if capability != "supported":
+                cause = "no_registered_capability" if definition is None else definition.get("cause", "unavailable_in_context")
+                self._schedule(
                     play,
                     order_time,
                     4,
-                    "item_disposition_recorded",
+                    "terminal_disposition",
                     item_id,
-                    {"status": capability, "cause": order["failure_cause"]},
+                    {"status": capability, "cause": cause},
                 )
                 continue
             if kind == "trace":
-                for offset in (0, 1, 2):
+                for offset in definition["sample_offsets_ms"]:
                     self._schedule(
                         play,
-                        4999 + offset,
+                        definition["capture_at_ms"] + offset,
                         3,
                         "trace_sample",
                         item_id,
                         {"sample_offset_ms": offset, "is_endpoint": offset == 2},
                     )
-                processing_time = 6000
+                processing_time = int(definition["processing_at_ms"])
             else:
-                capture_time = 11000 if item_id == "C" else 5000
+                capture_time = int(definition["capture_at_ms"])
                 self._schedule(play, capture_time, 3, "point_capture", item_id, {})
-                processing_time = 12000 if item_id == "C" else 6000
+                processing_time = int(definition["processing_at_ms"])
             self._schedule(play, processing_time, 4, "process_result", item_id, {})
+        if not self._advance(play, order_time):
+            return Receipt("processing_blocked", command.target_id, play["revision"], {"committed_time_ms": order_time}), False
         play["revision"] += 1
-        return Receipt("committed", command.target_id, play["revision"], {"ordered": [i for i, _, _ in new_items]}), True
+        return Receipt("committed", command.target_id, play["revision"], {"ordered": [i for i, _, _, _ in new_items]}), True
 
     def _wait(
         self, play: dict[str, Any], command: Command
@@ -529,7 +597,15 @@ class SQLiteAuthority:
             return True
 
         order = play["orders"].get(subject_id)
-        if order is None or order["status"] in {"cancelled", "closed_at_submission"}:
+        if order is None or order["status"] in {
+            "cancelled", "closed_at_submission", "failed", "unsupported", "unavailable", "released"
+        }:
+            return True
+
+        if kind == "terminal_disposition":
+            order["status"] = payload["status"]
+            order["failure_cause"] = payload["cause"]
+            self._append_event(play, time_ms, 4, "item_disposition_recorded", subject_id, payload)
             return True
 
         if kind == "point_capture":
@@ -573,7 +649,7 @@ class SQLiteAuthority:
                     "acquisition_id": acquisition_id,
                     "item_id": subject_id,
                     "kind": "trace",
-                    "captured_at_ms": 4999,
+                    "captured_at_ms": int(order["capture_at_ms"]),
                     "complete": False,
                     "samples": [],
                     **{name: order[name] for name in ("investigation_version", "adapter_version", "validation_policy_version", "model_version")},
@@ -609,13 +685,31 @@ class SQLiteAuthority:
             acquisition = play["acquisitions"].get(subject_id)
             if acquisition is None or not acquisition.get("complete"):
                 return False
+            disposition = order.get("failure_disposition")
+            if disposition is not None:
+                order["status"] = "failed"
+                order["failure_cause"] = disposition["cause"]
+                order["validation"] = {"policy_version": order["validation_policy_version"], "outcome": "not_run"}
+                self._append_event(
+                    play,
+                    time_ms,
+                    4,
+                    "result_failed",
+                    subject_id,
+                    {"cause": order["failure_cause"], "acquisition_id": acquisition["acquisition_id"], "disposition_recorded_at_ms": disposition["recorded_at_ms"]},
+                )
+                return True
             versions = {name: order[name] for name in ("investigation_version", "adapter_version", "validation_policy_version")}
             candidate = self.worker.get_candidate(play["playthrough_id"], subject_id, acquisition, versions)
             if candidate is None or not self._candidate_matches(candidate, play, order, acquisition):
                 return False
             if candidate.outcome == "failed":
                 order["status"] = "failed"
-                order["failure_cause"] = candidate.failure_cause or "worker_failed"
+                order["failure_cause"] = (
+                    candidate.failure_cause
+                    if isinstance(candidate.failure_cause, str) and candidate.failure_cause in WORKER_FAILURE_CAUSES
+                    else "worker_failed"
+                )
                 order["validation"] = {"policy_version": order["validation_policy_version"], "outcome": "not_run"}
                 self._append_event(
                     play,
@@ -642,7 +736,7 @@ class SQLiteAuthority:
                     {"acquisition_id": acquisition["acquisition_id"], "reason": validation["reason"]},
                 )
                 return True
-            eligible_at = 8000 if subject_id in {"A", "B", "T"} else 13000
+            eligible_at = int(order["eligible_at_ms"])
             candidate_result = dict(candidate.result)
             if acquisition["kind"] == "point":
                 validated_payload = {"value": candidate_result["value"], "units": "fixture-unit"}
@@ -655,6 +749,8 @@ class SQLiteAuthority:
                 }
                 if validation["outcome"] == "limited":
                     validated_payload["sample_offsets"] = list(candidate_result["sample_offsets"])
+                else:
+                    validated_payload["sample_offsets"] = [sample["offset_ms"] for sample in acquisition["samples"]]
             result = {
                 **validated_payload,
                 "item_id": subject_id,
@@ -672,8 +768,6 @@ class SQLiteAuthority:
             }
             if acquisition["kind"] == "trace":
                 result["primary_media_available"] = bool(candidate.result.get("media_available", True))
-                if "sample_offsets" in candidate.result:
-                    result["sample_offsets"] = list(candidate.result["sample_offsets"])
                 if not result["primary_media_available"]:
                     offsets = result.get("sample_offsets", [0, 1, 2][: len(result["samples"])])
                     result["accessible_text"] = (
@@ -684,17 +778,14 @@ class SQLiteAuthority:
                         )
                         + "."
                     )
-            if subject_id == "T":
+            if order.get("assessment_template") is not None:
                 if validation["outcome"] == "pass":
-                    result["validated_assessment"] = {
-                        "status": "available",
+                    order["validated_assessment"] = {
+                        **dict(order["assessment_template"]),
                         "study_id": acquisition["acquisition_id"],
-                        "supported_assertions": ["DX-A is supported by the trace step under Fixture-A rules"],
-                        "evidence": ["trace samples at offsets 0, 1, and 2 ms"],
-                        "uncertainty": "limited to the fictional fixture rubric",
                     }
                 else:
-                    result["validated_assessment"] = {"status": "unavailable", "study_id": acquisition["acquisition_id"]}
+                    order["validated_assessment"] = {"status": "unavailable", "study_id": acquisition["acquisition_id"]}
             order["status"] = "ready_withheld"
             order["eligible_at_ms"] = eligible_at
             order["result"] = result
@@ -710,10 +801,8 @@ class SQLiteAuthority:
                     "quality": result["quality"],
                 },
             )
-            if subject_id in {"A", "B", "C"}:
-                release_at = 13000 if subject_id == "C" else 8000
-                order["release_at_ms"] = release_at
-                self._schedule(play, release_at, 5, "automatic_release", subject_id, {})
+            if order["release_policy"] == "automatic":
+                self._schedule(play, int(order["release_at_ms"]), 5, "automatic_release", subject_id, {})
             return True
 
         if kind == "automatic_release":
@@ -806,17 +895,24 @@ class SQLiteAuthority:
         return _sha256(content)
 
     def _cancel_order(self, play: dict[str, Any], command: Command) -> tuple[Receipt, bool]:
-        item_id = str(command.payload.get("item_id", ""))
+        item_id = command.payload.get("item_id", "")
+        if not isinstance(item_id, str):
+            return Receipt("invalid_command", command.target_id, play["revision"]), False
         order = play["orders"].get(item_id)
         if order is None:
             return Receipt("not_found", command.target_id, play["revision"]), False
-        if item_id != "B" or play["elapsed_ms"] >= 6000:
+        cutoff = order.get("cancel_before_ms")
+        if cutoff is None or play["elapsed_ms"] >= cutoff:
             return Receipt("cancellation_closed", command.target_id, play["revision"]), False
-        if order["status"] in {"released", "cancelled", "failed", "closed_at_submission"}:
+        if order["status"] in {"released", "cancelled", "failed", "closed_at_submission", "unsupported", "unavailable"}:
             return Receipt("cancellation_closed", command.target_id, play["revision"]), False
         order["status"] = "cancelled"
         order["cancelled_at_ms"] = play["elapsed_ms"]
-        play["schedule"] = [event for event in play["schedule"] if event["subject_id"] != item_id]
+        order_event_kinds = {"point_capture", "trace_sample", "process_result", "automatic_release", "terminal_disposition"}
+        play["schedule"] = [
+            event for event in play["schedule"]
+            if not (event["subject_id"] == item_id and event["kind"] in order_event_kinds)
+        ]
         self._append_event(
             play,
             play["elapsed_ms"],
@@ -829,7 +925,9 @@ class SQLiteAuthority:
         return Receipt("committed", command.target_id, play["revision"], {"item_id": item_id}), True
 
     def _release_result(self, play: dict[str, Any], command: Command) -> tuple[Receipt, bool]:
-        item_id = str(command.payload.get("item_id", ""))
+        item_id = command.payload.get("item_id", "")
+        if not isinstance(item_id, str):
+            return Receipt("invalid_command", command.target_id, play["revision"]), False
         order = play["orders"].get(item_id)
         if order is None:
             return Receipt("not_found", command.target_id, play["revision"]), False
@@ -838,6 +936,29 @@ class SQLiteAuthority:
         self._commit_release(play, order, play["elapsed_ms"])
         play["revision"] += 1
         return Receipt("committed", command.target_id, play["revision"], {"item_id": item_id}), True
+
+    def _record_processing_failure(self, play: dict[str, Any], command: Command) -> tuple[Receipt, bool]:
+        item_id = command.payload.get("item_id", "")
+        cause = command.payload.get("cause", "")
+        if not isinstance(item_id, str) or not isinstance(cause, str) or cause not in WORKER_FAILURE_CAUSES:
+            return Receipt("invalid_command", command.target_id, play["revision"]), False
+        order = play["orders"].get(item_id)
+        acquisition = play["acquisitions"].get(item_id)
+        if order is None or order["status"] != "processing" or acquisition is None or not acquisition.get("complete"):
+            return Receipt("failure_not_eligible", command.target_id, play["revision"]), False
+        if order.get("failure_disposition") is not None:
+            return Receipt("failure_already_recorded", command.target_id, play["revision"]), False
+        order["failure_disposition"] = {"cause": cause, "recorded_at_ms": play["elapsed_ms"]}
+        self._append_event(
+            play,
+            play["elapsed_ms"],
+            6,
+            "failure_disposition_recorded",
+            item_id,
+            {"cause": cause, "acquisition_id": acquisition["acquisition_id"]},
+        )
+        play["revision"] += 1
+        return Receipt("committed", command.target_id, play["revision"], {"item_id": item_id, "cause": cause}), True
 
     def _commit_release(self, play: dict[str, Any], order: dict[str, Any], time_ms: int) -> None:
         order["status"] = "released"
@@ -855,7 +976,21 @@ class SQLiteAuthority:
         submitted_at = play["elapsed_ms"]
         cutoff_sequence = play["next_event_sequence"] - 1
         differential = command.payload.get("differential", [])
-        if not isinstance(differential, list) or not all(isinstance(item, str) for item in differential):
+        leading = command.payload.get("leading_diagnosis")
+        reasoning = command.payload.get("reasoning")
+        case = self._case_for_play(play)
+        accepted_diagnoses = case.get("reference_differential", [])
+        if (
+            not isinstance(differential, list)
+            or not differential
+            or not all(isinstance(item, str) and item for item in differential)
+            or len(differential) != len(set(differential))
+            or len(differential) > len(accepted_diagnoses)
+            or any(item not in accepted_diagnoses for item in differential)
+            or not isinstance(leading, str)
+            or leading not in differential
+            or not (reasoning is None or isinstance(reasoning, str))
+        ):
             return Receipt("invalid_command", command.target_id, play["revision"]), False
         accessible_evidence = {
             item_id: {
@@ -874,9 +1009,9 @@ class SQLiteAuthority:
         }
         submission = {
             "submitted_at_ms": submitted_at,
-            "leading_diagnosis": command.payload.get("leading_diagnosis"),
+            "leading_diagnosis": leading,
             "differential": list(differential),
-            "reasoning": command.payload.get("reasoning"),
+            "reasoning": reasoning,
             "evidence_cutoff_ms": submitted_at,
             "event_sequence_cutoff": cutoff_sequence,
             "accessible_evidence": {
@@ -893,7 +1028,6 @@ class SQLiteAuthority:
         }
 
         # Freeze adjudication inputs before changing any outstanding order states.
-        case = self._case_for_play(play)
         play["submission"] = submission
         play["debrief"] = self._build_debrief(play, case, submission, accessible_evidence)
         for item_id, order in play["orders"].items():
@@ -903,7 +1037,11 @@ class SQLiteAuthority:
                 order["closure_reason"] = "diagnosis_submission"
                 order["status"] = "closed_at_submission"
                 order["closed_at_ms"] = submitted_at
-                play["schedule"] = [event for event in play["schedule"] if event["subject_id"] != item_id]
+                order_event_kinds = {"point_capture", "trace_sample", "process_result", "automatic_release", "terminal_disposition"}
+                play["schedule"] = [
+                    event for event in play["schedule"]
+                    if not (event["subject_id"] == item_id and event["kind"] in order_event_kinds)
+                ]
                 self._append_event(
                     play,
                     submitted_at,
@@ -944,24 +1082,47 @@ class SQLiteAuthority:
         selected = set(play["orders"])
         redundant = sorted(item_id for item_id in selected if item_id == "C")
         text = reasoning.strip().lower() if isinstance(reasoning, str) else ""
+        point_result = accessible_evidence.get("A", {}).get("result", {})
+        trace_result = accessible_evidence.get("T", {}).get("result", {})
+        point = point_result.get("value")
+        samples = trace_result.get("samples", [])
+        offsets = trace_result.get("sample_offsets", [])
+        sample_by_offset = dict(zip(offsets, samples))
+        point_claim_supported = point == 2 and "point sample was 2" in text
+        trace_claim_supported = sample_by_offset.get(0) == 1 and sample_by_offset.get(1) == 2 and "trace rose from 1 to 2" in text
         evidence_link = (
-            "present"
-            if "point sample was 2" in text and "trace rose from 1 to 2" in text
-            else "absent" if text else "unassessed"
+            "unassessed" if not text else
+            "present" if point_claim_supported and trace_claim_supported else
+            "absent"
         )
         uncertainty = "present" if any(word in text for word in ("uncertain", "uncertainty", "might", "possibly")) else "absent" if text else "unassessed"
-        point = accessible_evidence.get("A", {}).get("result", {}).get("value")
-        trace = accessible_evidence.get("T", {}).get("result", {}).get("samples")
-        interpretation_supported = (
-            point == 2
-            and trace == [1, 2, 2]
-            and evidence_link == "present"
-        )
+        full_trace = samples == [1, 2, 2] and offsets == [0, 1, 2] and trace_result.get("quality") == "valid"
+        if not text or "T" not in accessible_evidence:
+            interpretation_status = "unassessed"
+        elif trace_result.get("quality") == "limited" and trace_claim_supported:
+            interpretation_status = "qualified"
+        elif "A" not in accessible_evidence:
+            interpretation_status = "qualified" if trace_claim_supported else "unassessed"
+        else:
+            interpretation_status = "supported" if full_trace and point_claim_supported and trace_claim_supported else "unsupported"
         key_evidence = []
         if "A" in accessible_evidence:
-            key_evidence.append({"item_id": "A", "observation": "point sample = 2", "acquisition_id": accessible_evidence["A"]["acquisition_id"]})
+            key_evidence.append({
+                "item_id": "A",
+                "observation": f"point sample = {point_result['value']}",
+                "value": point_result.get("value"),
+                "quality": point_result.get("quality"),
+                "acquisition_id": accessible_evidence["A"]["acquisition_id"],
+            })
         if "T" in accessible_evidence:
-            key_evidence.append({"item_id": "T", "observation": "trace samples = [1, 2, 2]", "acquisition_id": accessible_evidence["T"]["acquisition_id"]})
+            key_evidence.append({
+                "item_id": "T",
+                "observation": f"trace samples = {samples}",
+                "samples": list(samples),
+                "sample_offsets": list(offsets),
+                "quality": trace_result.get("quality"),
+                "acquisition_id": accessible_evidence["T"]["acquisition_id"],
+            })
         return {
             "rubric_version": "fixture-rubric-v1",
             "submitted_at_ms": submission["submitted_at_ms"],
@@ -971,12 +1132,12 @@ class SQLiteAuthority:
                 "differential_quality": {"status": "reference_ranked" if differential == case.get("reference_differential", []) else "partial" if leading in case.get("reference_key", []) else "incorrect", "reference_order": list(case.get("reference_differential", []))},
                 "test_selection": {"status": "required_tests_selected" if required.issubset(selected) else "missing_required_tests", "required": sorted(required), "selected": sorted(selected)},
                 "unnecessary_testing": {"status": "redundant_test" if redundant else "none", "items": redundant},
-                "interpretation": {"status": "supported" if interpretation_supported else "unassessed" if not text else "unsupported", "evidence_link": evidence_link},
+                "interpretation": {"status": interpretation_status, "evidence_link": evidence_link},
                 "explanation": {"status": "unassessed" if not text else "assessed"},
                 "reasoning": {"evidence_link": evidence_link, "uncertainty": uncertainty},
             },
             "key_evidence": key_evidence,
-            "valid_alternative_reasoning": ["DX-B was retained as a valid alternative under the fixture rubric."],
+            "valid_alternative_reasoning": (["DX-B was retained as a valid alternative under the fixture rubric."] if "DX-B" in differential else []),
             "uncertainty": {"reasoning_discussed": uncertainty == "present", "reference_limit": "fictional fixture rubric"},
             "interpretation_aids": [dict(aid) for aid in submission["interpretation_aids"]],
         }
@@ -990,7 +1151,7 @@ class SQLiteAuthority:
             return Receipt(order["status"] if order["status"] in {"unsupported", "unavailable", "failed", "cancelled"} else "withheld", command.target_id, play["revision"]), False
         view = {"item_id": item_id, "at_ms": play["elapsed_ms"], "acquisition_id": order["acquisition_id"]}
         play["artifact_views"].append(view)
-        self._append_event(play, play["elapsed_ms"], 5, "artifact_opened", item_id, view)
+        self._append_event(play, play["elapsed_ms"], 6, "artifact_opened", item_id, view)
         play["revision"] += 1
         return Receipt("committed", command.target_id, play["revision"], view), True
 
@@ -1001,7 +1162,7 @@ class SQLiteAuthority:
             return Receipt("not_found", command.target_id, play["revision"]), False
         if order["status"] != "released":
             return Receipt("withheld", command.target_id, play["revision"]), False
-        assessment = order["result"].get("validated_assessment", {"status": "unavailable"})
+        assessment = order.get("validated_assessment", {"status": "unavailable"})
         if assessment.get("status") != "available":
             return Receipt("assessment_unavailable", command.target_id, play["revision"], {"assessment": dict(assessment)}), False
         explanation_status = "not_requested"
@@ -1012,10 +1173,15 @@ class SQLiteAuthority:
                 {"study_id": assessment["study_id"], "assessment": dict(assessment), "observation": dict(order["result"])},
             )
             explanation_status = response.get("status", "error")
-            if explanation_status == "success" and isinstance(response.get("text"), str):
-                explanation_text = response["text"]
-            elif explanation_status == "success":
-                explanation_status = "error"
+            if explanation_status == "success":
+                expected_explanation = (
+                    "The trace rises from 1 to 2 and supports DX-A under Fixture-A rules; "
+                    "the conclusion is limited to this fictional rubric."
+                )
+                if response.get("text") == expected_explanation:
+                    explanation_text = expected_explanation
+                else:
+                    explanation_status = "inconsistent"
         aid = {
             "item_id": item_id,
             "assessment": dict(assessment),
@@ -1028,7 +1194,7 @@ class SQLiteAuthority:
         self._append_event(
             play,
             play["elapsed_ms"],
-            5,
+            6,
             "interpretation_delivered",
             item_id,
             {"acquisition_id": order["acquisition_id"], "explanation_status": explanation_status},
@@ -1065,6 +1231,13 @@ class SQLiteAuthority:
             or response.get("subjective_report") is not True
         ):
             return Receipt("dialogue_blocked", command.target_id, play["revision"], {"cause": "response_not_grounded"}), False
+        expected_text = (
+            "I remember one prior episode."
+            if fact_refs == ["subjective-prior-episodes"]
+            else "I'm not sure about that."
+        )
+        if text != expected_text or (not fact_refs and response.get("uncertainty") is not True):
+            return Receipt("dialogue_blocked", command.target_id, play["revision"], {"cause": "unsupported_assertion"}), False
         utterance = {
             "question": question,
             "answer": text,
@@ -1073,7 +1246,7 @@ class SQLiteAuthority:
             "at_ms": play["elapsed_ms"],
         }
         play["dialogue_history"].append(utterance)
-        self._append_event(play, play["elapsed_ms"], 2, "patient_utterance_committed", "patient", utterance)
+        self._append_event(play, play["elapsed_ms"], 6, "patient_utterance_committed", "patient", utterance)
         play["revision"] += 1
         return Receipt("committed", command.target_id, play["revision"], {"utterance": utterance}), True
 
@@ -1105,12 +1278,14 @@ class SQLiteAuthority:
             "case_version_id": play["case_version_id"],
             **FIXTURE_VERSIONS,
             "last_committed_ms": play["elapsed_ms"],
+            "current_state": dict(play["state"]),
+            "orders": {item_id: dict(order) for item_id, order in play["orders"].items()},
+            "acquisitions": {item_id: dict(acquisition) for item_id, acquisition in play["acquisitions"].items()},
             "pending_schedule": list(play["schedule"]),
-            "in_progress_acquisitions": {
-                item_id: acquisition
-                for item_id, acquisition in play["acquisitions"].items()
-                if not acquisition.get("complete", False)
-            },
+            "next_schedule_ordinal": play["next_schedule_ordinal"],
+            "next_event_sequence": play["next_event_sequence"],
+            "event_history_sha256": _sha256(play["events"]),
+            "private_case_sha256": _sha256(play["_private_case"]),
             "random_stream_state": {"fixture": "Fixture-A:stable-v1"},
         }
 
@@ -1122,13 +1297,7 @@ class SQLiteAuthority:
         continuation = play.get("continuation", {})
         basis = self._continuation_basis(play)
         return (
-            all(continuation.get(name) == value for name, value in FIXTURE_VERSIONS.items())
-            and continuation.get("schema_version") == 1
-            and continuation.get("case_version_id") == play["case_version_id"]
-            and continuation.get("last_committed_ms") == play["elapsed_ms"]
-            and continuation.get("pending_schedule") == play["schedule"]
-            and continuation.get("in_progress_acquisitions") == basis["in_progress_acquisitions"]
-            and continuation.get("random_stream_state") == basis["random_stream_state"]
+            all(continuation.get(name) == value for name, value in basis.items())
             and continuation.get("integrity_sha256") == _sha256(basis)
         )
 
@@ -1182,7 +1351,11 @@ class SQLiteAuthority:
         if playthrough_id == "catalog":
             if actor.role not in {"learner", "authority"}:
                 return Projection(playthrough_id, 0, 0, "forbidden")
-            case_ids = sorted(case_id for case_id, case in state["cases"].items() if case["published"])
+            case_ids = sorted(
+                case_id
+                for case_id, case in state["cases"].items()
+                if case["published"] and case.get("dialogue_mode", "luna_required") != "canned_only"
+            )
             return Projection(
                 playthrough_id,
                 state["catalog_revision"],
@@ -1222,7 +1395,12 @@ class SQLiteAuthority:
                 "orders": public_orders,
                 "released_results": released_results,
                 "history": {"verified_prior_episodes": 0},
-                "subjective_reports": {"prior_episodes": 1},
+                "subjective_reports": {
+                    "prior_episodes": sum(
+                        "subjective-prior-episodes" in utterance.get("fact_refs", [])
+                        for utterance in play["dialogue_history"]
+                    )
+                },
                 "dialogue_history": [dict(utterance) for utterance in play["dialogue_history"]],
                 "interpretation_aids": [dict(aid) for aid in play["interpretation_aids"]],
                 "submission": play["submission"],

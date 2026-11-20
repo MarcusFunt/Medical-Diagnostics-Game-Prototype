@@ -13,7 +13,7 @@ class LunaStub:
         dialogue_outcome: str = "success",
         explanation_outcome: str = "success",
         dialogue_text: str = "I remember one prior episode.",
-        explanation_text: str = "The trace rises from 1 to 2 and supports DX-A under Fixture-A rules.",
+        explanation_text: str = "The trace rises from 1 to 2 and supports DX-A under Fixture-A rules; the conclusion is limited to this fictional rubric.",
     ):
         self.dialogue_outcome = dialogue_outcome
         self.explanation_outcome = explanation_outcome
