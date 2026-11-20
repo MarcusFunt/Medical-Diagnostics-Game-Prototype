@@ -1,0 +1,28 @@
+# Experiment register
+
+## Stage 0–2 activity
+
+| ID | Activity | Candidate/pin | Method | Status / result | Limit |
+|---|---|---|---|---|---|
+| SRC-01 | Normalize inherited inventory | Canonical document v1.1, dated 19 November 2026 | Parsed the 96-row GitHub index, retained the 16 other primary-host records, and kept supplementary leads separate. | Complete; [inventory](01-normalized-inventory.md) preserves the 112-entry base count. | Normalization is not a fresh audit of all 112 sources. |
+| SRC-02 | Record source pins for shortlist and watchlist | 11 primary-shortlist repo capabilities plus two watchlist leads in [Stage 2](02-stage2-triage.md) | Metadata-only remote-ref lookups and read-only HTTP GETs to pinned upstream README/package/tree/source files; branch heads rechecked with `git ls-remote` on 20 November 2026. | Complete; all 12 recorded GitHub refs and Kitware Pulse `stable` still match the pin register; pins and reproducibility notes are in [03](03-evidence-and-reproducibility.md). | Source paths and maintainers' claims were inspected; behavior was not run. GitHub API rate limit prevented a complete timestamp refresh, so no commit dates are asserted. |
+| T0-* | Pre-execution safety screens | Not started | None. | **Not run by design at this checkpoint.** | User asked to review Stage 2 findings before later stages; no candidate is approved to execute. |
+| CAP-* | Runnable capability experiments | Not started | None. | **Zero experiments executed.** | Require Stage 3 T0, approved scope, disposable environment, synthetic/cleared data and recorded network exceptions. |
+
+## Next decision-changing experiments (proposals only)
+
+These are not commands to run before the Stage 2 review. Exact environments and commands must be selected only after the corresponding candidate clears T0.
+
+| Proposed ID | Candidate(s) | Minimal claim to falsify | Proposed synthetic fixture / observation | Why it can change the decision |
+|---|---|---|---|---|
+| CAP-01 | Open Sim Lab vs GTAgentClinic vs custom-core comparator | Can one foundation support the same history → exam → timed ECG → diagnosis → evidence debrief loop while keeping answer authority controlled? | One synthetic ECG skeleton. Record case-state owner, client-visible data, event/result timing, reset/replay, debrief, changed files and active engineering time. | Establishes whether a foundation actually saves work relative to small custom scope. |
+| CAP-02 | 12-Lead Generator | Can its ECG view be supplied as a player-only result without exposing the diagnosis/rubric or requiring a second case authority? | One generated/cleared trace; inspect controls, page payload, external requests, calibration, lead labels, keyboard and text alternatives. | Determines if the best first investigation is cheap to reuse or should be built/curated another way. |
+| CAP-03 | Patient Monitor Engine (only if a continuous monitor is in scope) | Can monitor output follow one game clock and a single case state without contradictory pulse/perfusion behavior? | Fixed synthetic rhythm/perfusion states; record paused/resumed/fast-forward timestamps and ECG/pulse/SpO₂ relationship. | Determines whether its physiology model is useful enough to justify package/build and adapter effort. |
+| CAP-04 | SimuPatient vs Virtual Standardized Patient (only if AI dialogue is approved) | Can authored case truth authorize all patient responses and findings, resist answer/result requests, and run within the approved offline/privacy budget? | Synthetic fictional case plus allowed/disallowed exam/test actions and adversarial requests. Inspect inputs/outputs, local/network behavior, case permissions and reset isolation. | Determines whether dialogue reuse saves work or increases integration/privacy cost beyond a deterministic first slice. |
+| CAP-05 | EchoSim / OHIF / SimEHR (only if added to slice) | Can a second workstation be bound to one authority with correct timing and no premature findings? | Synthetic/cleared study, one order and one release event; inspect metadata, study IDs, viewer response and learner-visible state before/after release. | Tests second-modality and chart integration rather than assuming screens combine cleanly. |
+
+## Experiment record fields for future use
+
+For each executed experiment, record: candidate ID and immutable commit; exact capability claim; OS/runtime/toolchain; disposable environment and configuration; reviewed install hooks; test fixture rights/hash; allowed network endpoints; exact commands and exit codes; output paths/hashes; active engineering time separately from download/build time; code patch delta; result by claim; failures/classification; reviewer/date; and remaining uncertainty. Keep software SBOM and clinical-resource provenance separate for any candidate advanced toward adoption.
+
+No runnable experiment should begin until the Stage 2 review and plan-defined T0 screen are complete. This register intentionally has no test outputs or measured effort.
