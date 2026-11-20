@@ -67,4 +67,16 @@ class GateAPort(Protocol):
         self, actor: Actor, playthrough_id: str, artifact_id: str
     ) -> ArtifactAccess: ...
 
+    def artifact_metadata(
+        self, actor: Actor, playthrough_id: str, artifact_id: str
+    ) -> ArtifactAccess: ...
+
+    def read_asset(
+        self,
+        actor: Actor,
+        playthrough_id: str,
+        artifact_id: str,
+        asset_id: str = "primary",
+    ) -> ArtifactAccess: ...
+
     def trusted_events(self, playthrough_id: str) -> Sequence[ClinicalEvent]: ...

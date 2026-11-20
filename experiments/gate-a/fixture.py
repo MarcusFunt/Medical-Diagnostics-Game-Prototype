@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from authority import SQLiteAuthority
+from luna import LunaStub
 from port import Actor, Command
 from workers import StubWorker
 
@@ -18,6 +19,7 @@ class FixtureRig:
     case_id: str
     playthrough_id: str
     worker: StubWorker
+    luna: LunaStub
 
 
 def make_fixture(
@@ -25,10 +27,12 @@ def make_fixture(
     initialize: bool = True,
     playthrough_id: str = "play-1",
     worker: StubWorker | None = None,
+    luna: LunaStub | None = None,
 ) -> FixtureRig:
     selected_worker = worker or StubWorker()
+    selected_luna = luna or LunaStub()
     rig = FixtureRig(
-        authority=SQLiteAuthority(db_path, worker=selected_worker),
+        authority=SQLiteAuthority(db_path, worker=selected_worker, luna=selected_luna),
         learner=Actor("learner-1", "learner"),
         other_learner=Actor("learner-2", "learner"),
         release_actor=Actor("release-service", "authority"),
@@ -36,6 +40,7 @@ def make_fixture(
         case_id="Fixture-A",
         playthrough_id=playthrough_id,
         worker=selected_worker,
+        luna=selected_luna,
     )
     if initialize:
         generated = rig.authority.execute(

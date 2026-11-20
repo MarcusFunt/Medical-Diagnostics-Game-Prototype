@@ -24,6 +24,8 @@ class GateAPortContractTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.assertTrue(hasattr(module, name), f"missing public type: {name}")
+        self.assertTrue(hasattr(module.GateAPort, "artifact_metadata"))
+        self.assertTrue(hasattr(module.GateAPort, "read_asset"))
 
     def test_sqlite_authority_is_available(self):
         spec = importlib.util.find_spec("authority")
@@ -48,6 +50,16 @@ class GateAPortContractTests(unittest.TestCase):
         fixture = importlib.import_module("fixture")
         self.assertIn("worker", inspect.signature(authority.SQLiteAuthority.__init__).parameters)
         self.assertIn("worker", inspect.signature(fixture.make_fixture).parameters)
+
+    def test_luna_stub_is_injected_without_provider_substitution(self):
+        spec = importlib.util.find_spec("luna")
+        self.assertIsNotNone(spec, "Gate A Luna stub is not implemented")
+        luna = importlib.import_module("luna")
+        self.assertTrue(hasattr(luna, "LunaStub"))
+        authority = importlib.import_module("authority")
+        fixture = importlib.import_module("fixture")
+        self.assertIn("luna", inspect.signature(authority.SQLiteAuthority.__init__).parameters)
+        self.assertIn("luna", inspect.signature(fixture.make_fixture).parameters)
     def test_fixture_factory_is_available(self):
         spec = importlib.util.find_spec("fixture")
         self.assertIsNotNone(spec, "Fixture-A factory is not implemented")
@@ -170,6 +182,12 @@ class GateA01To03Tests(unittest.TestCase):
         retry = self.authority.execute(self.learner, original)
         self.assertTrue(retry.replayed)
         self.assertEqual(retry.data, first.data)
+        refreshed_precondition_retry = self.authority.execute(
+            self.learner,
+            Command("order-a", "play-1", 999, "order_tests", original.payload),
+        )
+        self.assertTrue(refreshed_precondition_retry.replayed)
+        self.assertEqual(refreshed_precondition_retry.data, first.data)
 
         modified = Command(
             "order-a",
@@ -220,6 +238,21 @@ class GateA01To03Tests(unittest.TestCase):
         self.assertEqual(sum(receipt.replayed for receipt in receipts), 1)
         projection = self.authority.project(self.learner, "play-1")
         self.assertEqual(list(projection.data["orders"]), ["A"])
+
+    def test_a02_idempotency_keys_are_scoped_to_the_target(self):
+        self.seed_play("play-1")
+        self.assertEqual(self.start("play-2").status, "committed")
+        first = self.authority.execute(
+            self.learner,
+            Command("same-key", "play-1", 0, "order_tests", self.orders_payload(("A", "point"))),
+        )
+        second = self.authority.execute(
+            self.learner,
+            Command("same-key", "play-2", 0, "order_tests", self.orders_payload(("B", "point"))),
+        )
+        self.assertEqual((first.status, second.status), ("committed", "committed"))
+        self.assertEqual(set(self.authority.project(self.learner, "play-1").data["orders"]), {"A"})
+        self.assertEqual(set(self.authority.project(self.learner, "play-2").data["orders"]), {"B"})
 
 
     def test_database_handle_is_released_after_query_boundaries(self):
@@ -566,7 +599,356 @@ class GateA04To06And11Tests(unittest.TestCase):
         self.assertFalse(any(event.kind == "result_released" and event.subject_id == "A" for event in processing.authority.trusted_events(processing.playthrough_id)))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class GateA07To10Tests(unittest.TestCase):
+    FIXED_REASONING = "The point sample was 2 and the trace rose from 1 to 2."
+
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+
+    def rig(self, name, worker=None, luna=None):
+        return make_fixture(
+            Path(self.tempdir.name) / f"{name}.sqlite",
+            initialize=True,
+            worker=worker,
+            luna=luna,
+        )
+
+    @staticmethod
+    def execute(rig, command_id, kind, payload, actor=None, expected_revision=None):
+        authority = rig.authority
+        learner = rig.learner
+        if expected_revision is None:
+            expected_revision = authority.project(learner, rig.playthrough_id).revision
+        return authority.execute(
+            actor or learner,
+            Command(command_id, rig.playthrough_id, expected_revision, kind, payload),
+        )
+
+    def order(self, rig, *items):
+        return self.execute(
+            rig,
+            f"orders-{rig.authority.project(rig.learner, rig.playthrough_id).revision}",
+            "order_tests",
+            {"items": [{"item_id": item_id, "kind": kind} for item_id, kind in items]},
+        )
+
+    def wait(self, rig, duration, command_id):
+        return self.execute(rig, command_id, "wait", {"duration_ms": duration})
+
+    def candidate(self, rig, item_id, *, result=None):
+        events = rig.authority.trusted_events(rig.playthrough_id)
+        if item_id == "T":
+            event = next(event for event in events if event.kind == "trace_sample" and event.subject_id == item_id and event.payload.get("offset_ms") == 2)
+            samples = [event.payload["value"] for event in events if event.kind == "trace_sample" and event.subject_id == item_id]
+            default = {"samples": samples, "interpretation": "supports DX-A", "units": "fixture-unit"}
+        else:
+            event = next(event for event in events if event.kind == "point_captured" and event.subject_id == item_id)
+            default = {"value": event.payload["value"], "units": "fixture-unit"}
+        return WorkerCandidate(
+            playthrough_id=rig.playthrough_id,
+            item_id=item_id,
+            acquisition_id=event.payload["acquisition_id"],
+            input_hash=event.payload["input_hash"],
+            investigation_version=event.payload["investigation_version"],
+            adapter_version=event.payload["adapter_version"],
+            validation_policy_version=event.payload["validation_policy_version"],
+            outcome="ready",
+            result=default if result is None else result,
+        )
+
+    def release_trace_at_nine(self, rig, *, include_point=False):
+        items = [("T", "trace")]
+        if include_point:
+            items.insert(0, ("A", "point"))
+        self.assertEqual(self.order(rig, *items).status, "committed")
+        self.assertEqual(self.wait(rig, 5500, "wait-to-5500").status, "committed")
+        rig.worker.offer(self.candidate(rig, "T"))
+        if include_point:
+            rig.worker.offer(self.candidate(rig, "A"))
+        self.assertEqual(self.wait(rig, 500, "wait-to-6000").status, "committed")
+        self.assertEqual(self.wait(rig, 3000, "wait-to-9000").status, "committed")
+        return self.execute(rig, "release-T", "release_result", {"item_id": "T"}, actor=rig.release_actor)
+
+    def test_a07_metadata_assets_and_patient_role_share_release_boundary(self):
+        rig = self.rig("a07")
+        self.assertEqual(self.order(rig, ("T", "trace")).status, "committed")
+        self.assertEqual(self.wait(rig, 5500, "wait-to-5500").status, "committed")
+        rig.worker.offer(
+            self.candidate(
+                rig,
+                "T",
+                result={
+                    "samples": [1, 2, 2],
+                    "interpretation": "supports DX-A",
+                    "units": "fixture-unit",
+                    "reference_key": ["DX-B"],
+                    "private_annotation": "must not reach learner",
+                },
+            )
+        )
+        self.assertEqual(self.wait(rig, 500, "wait-to-6000").status, "committed")
+
+        before = rig.authority.project(rig.learner, rig.playthrough_id)
+        self.assertNotIn("T", before.data["released_results"])
+        self.assertNotIn("reference_key", before.data)
+        withheld_metadata = rig.authority.artifact_metadata(rig.learner, rig.playthrough_id, "T")
+        self.assertEqual(withheld_metadata.status, "withheld")
+        self.assertIsNone(withheld_metadata.artifact)
+        self.assertEqual(rig.authority.read_asset(rig.learner, rig.playthrough_id, "T").status, "withheld")
+        self.assertEqual(rig.authority.read_asset(rig.learner, rig.playthrough_id, "T", "accessible-text").status, "withheld")
+        self.assertEqual(rig.authority.read_artifact(rig.patient, rig.playthrough_id, "T").status, "forbidden")
+        self.assertEqual(rig.authority.artifact_metadata(rig.other_learner, rig.playthrough_id, "T").status, "forbidden")
+
+        self.assertEqual(self.wait(rig, 3000, "wait-to-9000").status, "committed")
+        self.assertEqual(self.execute(rig, "unauthorized-release", "release_result", {"item_id": "T"}, actor=rig.other_learner).status, "forbidden")
+        self.assertEqual(self.execute(rig, "release-T", "release_result", {"item_id": "T"}, actor=rig.release_actor).status, "committed")
+        opened = self.execute(rig, "open-T", "open_artifact", {"item_id": "T"})
+        self.assertEqual(opened.status, "committed")
+        metadata = rig.authority.artifact_metadata(rig.learner, rig.playthrough_id, "T")
+        self.assertEqual(metadata.status, "available")
+        self.assertTrue(metadata.artifact["accessible_text_available"])
+        primary = rig.authority.read_asset(rig.learner, rig.playthrough_id, "T", "primary")
+        text_alternative = rig.authority.read_asset(rig.learner, rig.playthrough_id, "T", "accessible-text")
+        self.assertEqual(primary.status, "available")
+        self.assertEqual(text_alternative.artifact["samples"], [1, 2, 2])
+        released_artifact = rig.authority.read_artifact(rig.learner, rig.playthrough_id, "T").artifact
+        self.assertNotIn("reference_key", released_artifact)
+        self.assertNotIn("private_annotation", released_artifact)
+        self.assertEqual(rig.authority.read_asset(rig.patient, rig.playthrough_id, "T", "accessible-text").status, "forbidden")
+
+        time_before = rig.authority.project(rig.learner, rig.playthrough_id).elapsed_ms
+        aid = self.execute(rig, "interpret-T", "request_interpretation", {"item_id": "T", "explanation": False})
+        self.assertEqual(aid.status, "committed")
+        projection = rig.authority.project(rig.learner, rig.playthrough_id)
+        self.assertNotIn("reference_key", projection.data)
+        self.assertEqual(projection.elapsed_ms, time_before)
+        self.assertEqual(projection.data["history"], {"verified_prior_episodes": 0})
+        self.assertEqual(projection.data["subjective_reports"], {"prior_episodes": 1})
+        assessment = projection.data["interpretation_aids"][0]["assessment"]
+        self.assertEqual(assessment, rig.authority.read_artifact(rig.learner, rig.playthrough_id, "T").artifact["validated_assessment"])
+        self.assertEqual(assessment["study_id"], "acq-play-1-T")
+        self.assertIn("DX-A", assessment["supported_assertions"][0])
+        self.assertNotIn("reference_key", projection.data)
+
+    def test_a08_submission_freezes_dimensioned_debrief_and_review_is_separate(self):
+        for index, reasoning in enumerate((self.FIXED_REASONING, None)):
+            with self.subTest(reasoning_present=reasoning is not None):
+                rig = self.rig(f"a08-{index}", worker=StubWorker(auto_prepare=True))
+                self.assertEqual(self.order(rig, ("A", "point"), ("T", "trace")).status, "committed")
+                self.assertEqual(self.wait(rig, 8000, f"wait-to-8000-{index}").status, "committed")
+                self.assertEqual(self.wait(rig, 1000, f"wait-to-9000-{index}").status, "committed")
+                self.assertEqual(self.execute(rig, f"release-T-{index}", "release_result", {"item_id": "T"}, actor=rig.release_actor).status, "committed")
+                self.assertEqual(self.execute(rig, f"open-A-{index}", "open_artifact", {"item_id": "A"}).status, "committed")
+                self.assertEqual(self.execute(rig, f"open-T-{index}", "open_artifact", {"item_id": "T"}).status, "committed")
+                self.assertEqual(self.execute(rig, f"aid-T-{index}", "request_interpretation", {"item_id": "T", "explanation": False}).status, "committed")
+                self.assertEqual(self.order(rig, ("C", "point")).status, "committed")
+                submitted_at_revision = rig.authority.project(rig.learner, rig.playthrough_id).revision
+                payload = {
+                    "leading_diagnosis": "DX-A",
+                    "differential": ["DX-A", "DX-B"],
+                    "reasoning": reasoning,
+                }
+                submitted = self.execute(rig, f"submit-{index}", "submit_diagnosis", payload, expected_revision=submitted_at_revision)
+                self.assertEqual(submitted.status, "committed")
+                completed = rig.authority.project(rig.learner, rig.playthrough_id)
+                self.assertEqual(completed.elapsed_ms, 9000)
+                self.assertEqual(completed.data["orders"]["C"]["status"], "closed_at_submission")
+                self.assertEqual(completed.data["orders"]["C"]["pre_close_state"], "ordered")
+                for item_id in ("A", "T"):
+                    snapshot = completed.data["submission"]["accessible_evidence"][item_id]
+                    self.assertEqual(set(snapshot["versions"]), {"investigation_version", "adapter_version", "validation_policy_version"})
+                self.assertFalse(any(event.subject_id == "C" and event.kind in {"point_captured", "result_released"} for event in rig.authority.trusted_events(rig.playthrough_id)))
+                debrief = completed.data["debrief"]
+                self.assertEqual(debrief["dimensions"]["diagnostic_accuracy"]["status"], "correct")
+                self.assertEqual(debrief["dimensions"]["differential_quality"]["status"], "reference_ranked")
+                self.assertEqual(debrief["dimensions"]["test_selection"]["status"], "required_tests_selected")
+                self.assertEqual(debrief["dimensions"]["unnecessary_testing"]["items"], ["C"])
+                self.assertEqual(debrief["dimensions"]["interpretation"]["status"], "supported" if reasoning else "unassessed")
+                self.assertEqual(len(debrief["interpretation_aids"]), 1)
+                if reasoning is None:
+                    self.assertEqual(debrief["dimensions"]["explanation"]["status"], "unassessed")
+                else:
+                    self.assertEqual(debrief["dimensions"]["reasoning"]["evidence_link"], "present")
+                    self.assertEqual(debrief["dimensions"]["reasoning"]["uncertainty"], "absent")
+
+                # The same logical retry remains authorized after later revisions and ignores its stale precondition.
+                retry = self.execute(rig, f"submit-{index}", "submit_diagnosis", payload, expected_revision=0)
+                self.assertTrue(retry.replayed)
+                self.assertEqual(retry.data, submitted.data)
+                after_review_baseline = rig.authority.project(rig.learner, rig.playthrough_id)
+                if index == 0:
+                    review = self.execute(rig, f"review-{index}", "review_case", {"rating": 4, "comment": "Clear evidence."})
+                    expected_review_status = "submitted"
+                else:
+                    review = self.execute(rig, f"review-{index}", "skip_review", {})
+                    expected_review_status = "skipped"
+                self.assertEqual(review.status, "committed")
+                after_review = rig.authority.project(rig.learner, rig.playthrough_id)
+                self.assertEqual(after_review.data["debrief"], after_review_baseline.data["debrief"])
+                self.assertEqual(after_review.data["review"]["status"], expected_review_status)
+                reopened = type(rig.authority)(rig.authority.db_path, worker=rig.worker, luna=rig.luna)
+                self.assertEqual(reopened.project(rig.learner, rig.playthrough_id).data["debrief"], after_review.data["debrief"])
+                self.assertEqual(reopened.project(rig.learner, rig.playthrough_id).data["review"], after_review.data["review"])
+                self.assertEqual(rig.authority.project(rig.learner, "catalog").data["publication_count"], 1)
+                self.assertEqual(self.wait(rig, 4000, f"post-case-wait-{index}").status, "encounter_complete")
+
+    def test_a09_fallback_limited_unsupported_validation_and_storage_outcomes(self):
+        fallback = self.rig("a09-fallback")
+        self.assertEqual(self.order(fallback, ("T", "trace")).status, "committed")
+        self.assertEqual(self.wait(fallback, 5500, "fallback-to-5500").status, "committed")
+        fallback.worker.offer(self.candidate(fallback, "T", result={"samples": [1, 2, 2], "interpretation": "supports DX-A", "units": "fixture-unit", "media_available": False}))
+        self.assertEqual(self.wait(fallback, 500, "fallback-to-6000").status, "committed")
+        self.assertEqual(self.wait(fallback, 3000, "fallback-to-9000").status, "committed")
+        self.assertEqual(self.execute(fallback, "fallback-release", "release_result", {"item_id": "T"}, actor=fallback.release_actor).status, "committed")
+        self.assertEqual(fallback.authority.read_asset(fallback.learner, fallback.playthrough_id, "T", "primary").status, "unavailable")
+        fallback_text = fallback.authority.read_asset(fallback.learner, fallback.playthrough_id, "T", "accessible-text")
+        self.assertEqual(fallback_text.status, "available")
+        self.assertEqual(fallback_text.artifact["samples"], [1, 2, 2])
+
+        unsupported = self.rig("a09-unsupported")
+        unsupported_receipt = self.execute(unsupported, "unsupported-order", "order_tests", {"items": [{"item_id": "U", "kind": "point", "capability": "unsupported"}]})
+        self.assertEqual(unsupported_receipt.status, "committed")
+        self.assertEqual(unsupported.authority.project(unsupported.learner, unsupported.playthrough_id).data["orders"]["U"]["status"], "unsupported")
+        self.assertEqual(unsupported.authority.read_artifact(unsupported.learner, unsupported.playthrough_id, "U").status, "unsupported")
+        unavailable_receipt = self.execute(unsupported, "unavailable-order", "order_tests", {"items": [{"item_id": "N", "kind": "point", "capability": "unavailable"}]})
+        self.assertEqual(unavailable_receipt.status, "committed")
+        self.assertEqual(unsupported.authority.project(unsupported.learner, unsupported.playthrough_id).data["orders"]["N"]["status"], "unavailable")
+        self.assertEqual(unsupported.authority.read_artifact(unsupported.learner, unsupported.playthrough_id, "N").status, "unavailable")
+
+        limited = self.rig("a09-limited")
+        self.assertEqual(self.order(limited, ("T", "trace")).status, "committed")
+        self.assertEqual(self.wait(limited, 5500, "limited-to-5500").status, "committed")
+        limited.worker.offer(self.candidate(limited, "T", result={"samples": [1, 2], "sample_offsets": [0, 1], "quality": "limited", "interpretation": "partial trace only", "units": "fixture-unit"}))
+        self.assertEqual(self.wait(limited, 500, "limited-to-6000").status, "committed")
+        self.assertEqual(self.wait(limited, 3000, "limited-to-9000").status, "committed")
+        self.assertEqual(self.execute(limited, "limited-release", "release_result", {"item_id": "T"}, actor=limited.release_actor).status, "committed")
+        limited_result = limited.authority.read_artifact(limited.learner, limited.playthrough_id, "T").artifact
+        self.assertEqual(limited_result["quality"], "limited")
+        self.assertEqual(limited_result["samples"], [1, 2])
+        self.assertEqual(limited_result["validated_assessment"]["status"], "unavailable")
+
+        rejected = self.rig("a09-invalid-units")
+        self.assertEqual(self.order(rejected, ("A", "point")).status, "committed")
+        self.assertEqual(self.wait(rejected, 5500, "invalid-to-5500").status, "committed")
+        rejected.worker.offer(self.candidate(rejected, "A", result={"value": 2, "units": "wrong-unit"}))
+        self.assertEqual(self.wait(rejected, 500, "invalid-to-6000").status, "committed")
+        self.assertEqual(rejected.authority.project(rejected.learner, rejected.playthrough_id).data["orders"]["A"]["status"], "failed")
+        self.assertEqual(rejected.authority.read_artifact(rejected.learner, rejected.playthrough_id, "A").status, "failed")
+        self.assertNotIn("value", (rejected.authority.read_artifact(rejected.learner, rejected.playthrough_id, "A").artifact or {}))
+
+    def test_a09_storage_failure_rolls_back_clock_revision_and_receipt(self):
+        import sqlite3
+
+        rig = self.rig("a09-storage")
+        before = rig.authority.project(rig.learner, rig.playthrough_id)
+        connection = sqlite3.connect(rig.authority.db_path)
+        try:
+            connection.execute("CREATE TRIGGER fail_authority_update BEFORE UPDATE ON authority_state BEGIN SELECT RAISE(ABORT, 'injected write failure'); END")
+        finally:
+            connection.close()
+        failed = self.execute(rig, "storage-failure", "wait", {"duration_ms": 250})
+        self.assertEqual(failed.status, "storage_failed")
+        after = rig.authority.project(rig.learner, rig.playthrough_id)
+        self.assertEqual((after.elapsed_ms, after.revision), (before.elapsed_ms, before.revision))
+        connection = sqlite3.connect(rig.authority.db_path)
+        try:
+            connection.execute("DROP TRIGGER fail_authority_update")
+            connection.commit()
+        finally:
+            connection.close()
+        retried = self.execute(rig, "storage-failure", "wait", {"duration_ms": 250})
+        self.assertEqual(retried.status, "committed")
+        self.assertEqual(rig.authority.project(rig.learner, rig.playthrough_id).elapsed_ms, 250)
+
+    def test_a10_dialogue_requires_luna_and_saved_turns_survive_provider_outage(self):
+        luna_module = importlib.import_module("luna")
+        LunaStub = luna_module.LunaStub
+        for index, outcome in enumerate(("denied", "unavailable", "error")):
+            with self.subTest(outcome=outcome):
+                luna = LunaStub(dialogue_outcome=outcome)
+                rig = self.rig(f"a10-blocked-{index}", luna=luna)
+                before = rig.authority.project(rig.learner, rig.playthrough_id)
+                events_before = rig.authority.trusted_events(rig.playthrough_id)
+                blocked = self.execute(rig, "ask-patient", "ask_patient", {"question": "How many episodes do you recall?"})
+                after = rig.authority.project(rig.learner, rig.playthrough_id)
+                self.assertEqual(blocked.status, "dialogue_blocked")
+                self.assertEqual((after.elapsed_ms, after.revision), (before.elapsed_ms, before.revision))
+                self.assertEqual(rig.authority.trusted_events(rig.playthrough_id), events_before)
+                self.assertEqual(after.data["dialogue_history"], [])
+                self.assertNotIn("DX-A", str(luna.requests[-1]["context"]))
+                if outcome == "error":
+                    luna.dialogue_outcome = "success"
+                    retried = self.execute(rig, "ask-patient", "ask_patient", {"question": "How many episodes do you recall?"})
+                    self.assertEqual(retried.status, "committed")
+
+        luna = LunaStub()
+        rig = self.rig("a10-history", luna=luna)
+        accepted = self.execute(rig, "ask-patient", "ask_patient", {"question": "How many episodes do you recall?"})
+        self.assertEqual(accepted.status, "committed")
+        saved = rig.authority.project(rig.learner, rig.playthrough_id)
+        self.assertEqual(len(saved.data["dialogue_history"]), 1)
+        unavailable = LunaStub(dialogue_outcome="unavailable", explanation_outcome="unavailable")
+        reopened = type(rig.authority)(rig.authority.db_path, worker=rig.worker, luna=unavailable)
+        replay = reopened.project(rig.learner, rig.playthrough_id)
+        self.assertEqual(replay.data["dialogue_history"], saved.data["dialogue_history"])
+        later = reopened.execute(rig.learner, Command("new-question", rig.playthrough_id, replay.revision, "ask_patient", {"question": "Anything else?"}))
+        self.assertEqual(later.status, "dialogue_blocked")
+
+        # A failed explanation cannot replace the already validated reference assessment.
+        self.assertEqual(self.release_trace_at_nine(rig, include_point=True).status, "committed")
+        explanation = reopened.execute(rig.learner, Command("explain-T", rig.playthrough_id, reopened.project(rig.learner, rig.playthrough_id).revision, "request_interpretation", {"item_id": "T", "explanation": True}))
+        self.assertEqual(explanation.status, "committed")
+        aid = reopened.project(rig.learner, rig.playthrough_id).data["interpretation_aids"][-1]
+        self.assertEqual(aid["assessment"]["status"], "available")
+        self.assertEqual(aid["explanation_status"], "unavailable")
+
+        import json
+        import sqlite3
+
+        connection = sqlite3.connect(rig.authority.db_path)
+        try:
+            payload = json.loads(connection.execute("SELECT payload FROM authority_state WHERE singleton=1").fetchone()[0])
+            payload["cases"]["Fixture-A"]["dialogue_mode"] = "canned_only"
+            connection.execute("UPDATE authority_state SET payload=? WHERE singleton=1", (json.dumps(payload),))
+            connection.commit()
+        finally:
+            connection.close()
+        legacy = reopened.execute(rig.learner, Command("start-legacy", "case:Fixture-A", None, "start_playthrough", {"playthrough_id": "legacy-play"}))
+        self.assertEqual(legacy.status, "legacy_case_not_playable")
+
+
+class GateASchedulerBoundaryTests(unittest.TestCase):
+    def test_scheduler_rejects_backwards_time_phase_and_overlong_chain(self):
+        import importlib
+
+        module = importlib.import_module("scheduler")
+        with self.assertRaises(module.ScheduleError):
+            module.EventScheduler.validate_new_event(5000, 4, 4999, 5)
+        with self.assertRaises(module.ScheduleError):
+            module.EventScheduler.validate_new_event(5000, 6, 5000, 1)
+        with self.assertRaises(module.ScheduleError):
+            module.EventScheduler(max_same_time_events=2).check_chain(3)
+
+    def test_clock_overflow_rejects_without_advancing_or_revising(self):
+        from authority import MAX_CLINICAL_TIME_MS
+
+        with tempfile.TemporaryDirectory() as directory:
+            rig = make_fixture(Path(directory) / "clock-overflow.sqlite", initialize=True)
+            at_limit = rig.authority.execute(
+                rig.learner,
+                Command("to-clock-limit", rig.playthrough_id, 0, "wait", {"duration_ms": MAX_CLINICAL_TIME_MS}),
+            )
+            self.assertEqual(at_limit.status, "committed")
+            before = rig.authority.project(rig.learner, rig.playthrough_id)
+            overflow = rig.authority.execute(
+                rig.learner,
+                Command("past-clock-limit", rig.playthrough_id, before.revision, "wait", {"duration_ms": 1}),
+            )
+            after = rig.authority.project(rig.learner, rig.playthrough_id)
+            self.assertEqual(overflow.status, "clock_overflow")
+            self.assertEqual((after.elapsed_ms, after.revision), (before.elapsed_ms, before.revision))
+
+
 if __name__ == "__main__":
     unittest.main()
