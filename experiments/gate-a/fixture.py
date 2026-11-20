@@ -5,6 +5,7 @@ from pathlib import Path
 
 from authority import SQLiteAuthority
 from port import Actor, Command
+from workers import StubWorker
 
 
 @dataclass
@@ -16,21 +17,25 @@ class FixtureRig:
     patient: Actor
     case_id: str
     playthrough_id: str
+    worker: StubWorker
 
 
 def make_fixture(
     db_path: str | Path,
     initialize: bool = True,
     playthrough_id: str = "play-1",
+    worker: StubWorker | None = None,
 ) -> FixtureRig:
+    selected_worker = worker or StubWorker()
     rig = FixtureRig(
-        authority=SQLiteAuthority(db_path),
+        authority=SQLiteAuthority(db_path, worker=selected_worker),
         learner=Actor("learner-1", "learner"),
         other_learner=Actor("learner-2", "learner"),
         release_actor=Actor("release-service", "authority"),
         patient=Actor("patient-npc", "patient"),
         case_id="Fixture-A",
         playthrough_id=playthrough_id,
+        worker=selected_worker,
     )
     if initialize:
         generated = rig.authority.execute(
