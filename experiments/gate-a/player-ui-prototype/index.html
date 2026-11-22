@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Medical Diagnostics Game — Local Prototype</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#home" aria-label="Medical Diagnostics Game Home" data-screen="home">
+          <span class="brand-mark" aria-hidden="true">M</span>
+          <span class="brand-copy"><strong>MEDDX</strong><small>diagnostic workbench</small></span>
+        </a>
+        <nav class="primary-nav" aria-label="Main navigation">
+          <button class="nav-link active" data-screen="home">Home</button>
+          <button class="nav-link" data-screen="encounter">Encounter</button>
+          <button class="nav-link" data-screen="investigations">Investigations</button>
+          <button class="nav-link" data-screen="diagnosis">Diagnosis</button>
+        </nav>
+        <div class="topbar-status">
+          <span class="local-badge"><i aria-hidden="true"></i> LOCAL SYNTHETIC</span>
+          <button class="icon-button help-button" data-action="toggle-help" aria-label="Open prototype help">?</button>
+        </div>
+      </header>
+
+      <div class="prototype-banner" role="note">
+        <span class="banner-icon" aria-hidden="true">◇</span>
+        <p><strong>Non-live software exercise.</strong> Fictional Fixture-A values only. No patient data, external inference, or clinical guidance.</p>
+        <button class="banner-dismiss" data-action="dismiss-banner" aria-label="Dismiss prototype notice">×</button>
+      </div>
+
+      <div class="encounter-bar" id="encounter-bar" hidden>
+        <div class="identity-line">
+          <span class="avatar" aria-hidden="true">P</span>
+          <div><strong id="patient-label">Patient 04</strong><span id="attempt-label">No active attempt</span></div>
+        </div>
+        <div class="encounter-state"><span class="status-dot"></span><span id="attempt-status">Ready</span></div>
+        <div class="clock-readout"><span>CLINICAL TIME</span><strong id="clinical-clock">00:00</strong></div>
+        <button class="text-button" data-action="continue-encounter">Continue encounter <span aria-hidden="true">→</span></button>
+      </div>
+
+      <main id="main-content" tabindex="-1">
+        <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+        <div class="draft-status" id="draft-status" role="status" hidden></div>
+        <section class="draft-conflict" id="draft-conflict" role="alert" aria-labelledby="draft-conflict-title" hidden>
+          <div><strong id="draft-conflict-title">Another tab saved a newer draft</strong><p>Your edits stay in this tab. Resolve the saved-copy conflict before making another clinical change.</p></div>
+          <div class="draft-conflict-actions"><button class="secondary-button" data-action="restore-newer-draft">Use newer saved draft</button><button class="primary-button" data-action="save-my-draft">Keep my draft and save it</button></div>
+        </section>
+        <section class="command-recovery" id="command-recovery" role="alert" aria-labelledby="command-recovery-title" hidden>
+          <div><strong id="command-recovery-title">Order outcome needs confirmation</strong><p id="command-recovery-detail"></p></div>
+          <div class="draft-conflict-actions"><button class="secondary-button" data-action="check-order-recovery">Check status</button><button class="primary-button" data-action="retry-order-recovery">Retry same order</button></div>
+        </section>
+
+        <section class="screen screen-active" id="screen-home" data-page="home" aria-labelledby="home-title">
+          <div class="page-heading home-heading">
+            <div>
+              <p class="eyebrow">PRIVATE EDUCATIONAL SIMULATION</p>
+              <h1 id="home-title">Your diagnostic workspace</h1>
+              <p class="lede">Work through a fictional case, inspect released evidence, and review your reasoning.</p>
+            </div>
+            <div class="heading-meta"><span class="live-pill"><i></i> Prototype mode</span><span>Saved locally on this device</span></div>
+          </div>
+
+          <div class="home-grid">
+            <section class="panel home-primary" aria-labelledby="continue-title">
+              <div class="panel-head"><div><p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2 id="continue-title">Continue your work</h2></div><span class="panel-icon" aria-hidden="true">↗</span></div>
+              <div id="home-continue" class="continue-content"></div>
+              <div class="panel-divider"></div>
+              <div class="section-row"><div><h3>Case library</h3><p>One local synthetic fixture is available.</p></div><span class="count-pill" id="case-count">0 CASES</span></div>
+              <div id="library-card"></div>
+            </section>
+
+            <aside class="home-side">
+              <section class="panel readiness-panel">
+                <p class="eyebrow">SESSION READINESS</p>
+                <h2>Local prototype</h2>
+                <div class="readiness-row"><span class="readiness-check">✓</span><div><strong>Fixture authority</strong><small>Gate A · SQLite</small></div><span class="state-label ready-label">Ready</span></div>
+                <div class="readiness-row"><span class="readiness-pending">◷</span><div><strong>Patient dialogue</strong><small>Offline Luna double</small></div><span class="state-label blocked-label" id="dialogue-readiness">Blocked</span></div>
+                <p class="helper-copy">The local build shows the Luna blocker. Use walkthrough controls to switch the synthetic dialogue scenario.</p>
+              </section>
+              <section class="panel recent-panel">
+                <div class="section-row"><div><p class="eyebrow">LOCAL HISTORY</p><h2>Recent attempts</h2></div></div>
+                <div id="recent-attempts" class="recent-list"></div>
+              </section>
+            </aside>
+          </div>
+          <footer class="page-foot"><span>Build 0.1.0 · Fixture-A v1</span><span>Use only fictional data in this prototype</span></footer>
+        </section>
+
+        <section class="screen" id="screen-encounter" data-page="encounter" aria-labelledby="encounter-title" hidden>
+          <div class="page-heading compact-heading">
+            <div><p class="eyebrow">ATTEMPT WORKSPACE</p><h1 id="encounter-title">Encounter</h1><p class="lede">Patient-reported details and measurements are kept separate.</p></div>
+            <button class="secondary-button" data-screen="investigations">Open worklist <span aria-hidden="true">→</span></button>
+          </div>
+          <div class="workspace-grid">
+            <aside class="panel patient-card">
+              <div class="patient-card-head"><span class="avatar large" aria-hidden="true">P</span><div><span class="eyebrow">FICTIONAL PATIENT</span><h2>Patient 04</h2><span class="muted">Fixture-A · Version 1</span></div></div>
+              <div class="patient-divider"></div>
+              <dl class="patient-facts"><div><dt>Presenting context</dt><dd>Synthetic software fixture</dd></div><div><dt>Verified prior episodes</dt><dd>0 in this fixture</dd></div><div><dt>Measurements</dt><dd id="patient-measurements">None released yet</dd></div></dl>
+              <div class="notice-box"><span aria-hidden="true">i</span><p>Fixture-A contains arbitrary values and opaque diagnosis codes. They do not represent a real condition.</p></div>
+              <div class="patient-actions"><button class="secondary-button full-width" data-screen="investigations">Investigations <span aria-hidden="true">→</span></button><button class="secondary-button full-width" data-screen="diagnosis">Diagnosis draft <span aria-hidden="true">→</span></button></div>
+            </aside>
+
+            <div class="encounter-main">
+              <section class="panel transcript-panel" aria-labelledby="talk-title">
+                <div class="panel-head"><div><p class="eyebrow">PATIENT CONVERSATION</p><h2 id="talk-title">Talk</h2></div><span class="role-chip">Patient</span></div>
+                <div id="transcript" class="transcript" aria-live="polite"></div>
+                <form id="talk-form" class="talk-form">
+                  <label for="question-input">Ask the patient</label>
+                  <textarea id="question-input" name="question" rows="2" placeholder="Ask about the patient's history…" maxlength="500"></textarea>
+                  <div class="form-footer"><span class="helper-copy">A confirmed reply uses zero clinical time.</span><button class="primary-button" type="submit" id="send-question">Send question <span aria-hidden="true">↗</span></button></div>
+                </form>
+                <div class="blocked-callout" id="dialogue-blocker" hidden><span class="blocked-symbol" aria-hidden="true">!</span><div><strong>New dialogue unavailable</strong><p>The saved question is still here. You can reconnect in a live build, review the Chart, or continue with supported synthetic actions.</p></div></div>
+              </section>
+
+              <section class="panel chart-panel" aria-labelledby="chart-title">
+                <div class="panel-head"><div><p class="eyebrow">KNOWN CONTEXT</p><h2 id="chart-title">Chart</h2></div><button class="quiet-button" data-action="refresh">Refresh <span aria-hidden="true">↻</span></button></div>
+                <div class="chart-grid"><div class="chart-item"><span class="chart-icon">01</span><div><strong>History</strong><small id="chart-history">No verified prior episodes recorded</small></div><span class="source-tag">VERIFIED</span></div><div class="chart-item"><span class="chart-icon">02</span><div><strong>Vitals</strong><small>No measurements yet</small></div><span class="source-tag">NOT MEASURED</span></div><div class="chart-item"><span class="chart-icon">03</span><div><strong>Medication history</strong><small>Not included in this fixture</small></div><span class="source-tag muted-tag">UNKNOWN</span></div><div class="chart-item"><span class="chart-icon">04</span><div><strong>Allergies</strong><small>Not included in this fixture</small></div><span class="source-tag muted-tag">UNKNOWN</span></div></div>
+                <div class="chart-foot"><span class="source-tag patient-tag">PATIENT REPORTED</span><span>Dialogue appears separately from verified chart data.</span></div>
+              </section>
+            </div>
+
+            <aside class="panel worklist-panel" aria-labelledby="worklist-title">
+              <div class="panel-head"><div><p class="eyebrow">ATTEMPT STATUS</p><h2 id="worklist-title">Worklist</h2></div><span class="clock-mini" id="mini-clock">00:00</span></div>
+              <div id="worklist-summary" class="worklist-summary"></div>
+              <div class="panel-divider"></div>
+              <button class="secondary-button full-width" data-screen="investigations">Review investigations <span aria-hidden="true">→</span></button>
+              <button class="secondary-button full-width" data-screen="diagnosis">Build differential <span aria-hidden="true">→</span></button>
+              <div class="zero-time-note"><span>◷</span><p>Reading, navigation, and citation do not advance clinical time.</p></div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-investigations" data-page="investigations" aria-labelledby="investigations-title" hidden>
+          <div class="page-heading compact-heading">
+            <div><p class="eyebrow">ORDER, TRACK, INSPECT</p><h1 id="investigations-title">Investigations</h1><p class="lede">Review the selected actions before placing orders. Only committed waits move the clinical clock.</p></div>
+            <div class="clock-card"><span>CLINICAL TIME</span><strong id="investigations-clock">00:00</strong></div>
+          </div>
+          <div class="investigation-layout">
+            <div class="investigation-main">
+              <section class="panel catalog-panel" aria-labelledby="catalog-title">
+                <div class="panel-head"><div><p class="eyebrow">SYNTHETIC CATALOG</p><h2 id="catalog-title">Available actions</h2></div><span class="count-pill">4 FIXTURE ITEMS</span></div>
+                <p class="panel-intro">These are software fixture IDs, not names of medical tests. Select actions, then review the queue.</p>
+                <div class="catalog-list" id="catalog-list"></div>
+                <div class="order-actions"><span id="order-draft-count">0 selected</span><button class="primary-button" data-action="review-orders" id="review-orders">Review selected <span aria-hidden="true">→</span></button></div>
+              </section>
+
+              <section class="panel order-review-panel" id="order-review-panel" hidden aria-labelledby="order-review-title">
+                <div class="panel-head"><div><p class="eyebrow">CONFIRMATION</p><h2 id="order-review-title">Review order queue</h2></div><span class="step-chip">No time change</span></div>
+                <div id="order-review-items"></div>
+                <div class="review-impact"><strong>Before you continue</strong><p>Placing these orders records them at the current clinical time. Acquisition and release occur only through the synthetic authority schedule.</p></div>
+                <div class="button-row"><button class="secondary-button" data-action="cancel-order-review">Edit selection</button><button class="primary-button" data-action="place-orders">Place orders <span aria-hidden="true">↗</span></button></div>
+              </section>
+
+              <section class="panel worklist-orders-panel" aria-labelledby="orders-title">
+                <div class="panel-head"><div><p class="eyebrow">COMMITTED ITEMS</p><h2 id="orders-title">Order worklist</h2></div><span id="orders-count" class="count-pill">0 ITEMS</span></div>
+                <div id="order-list" class="order-list"></div>
+                <div class="time-control" id="time-control">
+                  <div><span class="eyebrow">ADVANCE CLINICAL TIME</span><p>Choose a duration. Waiting has a declared clock effect.</p></div>
+                  <label class="duration-control" for="wait-duration"><span>Duration</span><select id="wait-duration"><option value="1000">1 second</option><option value="3000">3 seconds</option><option value="9000" selected>9 seconds</option></select></label>
+                  <button class="primary-button" data-action="wait">Continue time <span aria-hidden="true">→</span></button>
+                </div>
+              </section>
+            </div>
+            <aside class="panel order-tray" aria-labelledby="tray-title">
+              <p class="eyebrow">QUICK STATUS</p><h2 id="tray-title">Attempt worklist</h2>
+              <div id="tray-summary"></div>
+              <div class="panel-divider"></div>
+              <button class="secondary-button full-width" data-screen="diagnosis">Open diagnosis <span aria-hidden="true">→</span></button>
+              <div class="access-note"><strong>Evidence access</strong><p>Only released results can be opened. Pending status does not reveal a result or its metadata.</p></div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="screen viewer-screen" id="screen-viewer" data-page="viewer" aria-labelledby="viewer-title" hidden>
+          <div class="viewer-topline"><button class="back-link" data-action="return-viewer">← <span id="viewer-back-label">Back to investigations</span></button><span class="viewer-attempt" id="viewer-attempt"></span></div>
+          <div class="page-heading compact-heading"><div><p class="eyebrow">RELEASED STUDY</p><h1 id="viewer-title">Study viewer</h1><p class="lede" id="viewer-subtitle">Synthetic data · Fixture-A</p></div><span class="released-badge"><i></i> Released evidence</span></div>
+          <div id="viewer-content" class="viewer-layout"></div>
+        </section>
+
+        <section class="screen" id="screen-diagnosis" data-page="diagnosis" aria-labelledby="diagnosis-title" hidden>
+          <div class="page-heading compact-heading"><div><p class="eyebrow">REASON FROM THE RECORD</p><h1 id="diagnosis-title">Diagnosis draft</h1><p class="lede">Rank hypotheses and write the reasoning that will appear in your submission.</p></div><span class="draft-badge">DRAFT ONLY</span></div>
+          <div class="diagnosis-grid">
+            <div class="diagnosis-main">
+              <section class="panel differential-panel"><div class="panel-head"><div><p class="eyebrow">LEADING HYPOTHESES</p><h2>Rank your differential</h2></div><span class="count-pill">UP TO 2</span></div><p class="panel-intro">Use the controls to change rank. These opaque labels belong only to Fixture-A.</p><ol id="differential-list" class="differential-list"></ol></section>
+              <section class="panel reasoning-panel"><div class="panel-head"><div><p class="eyebrow">PLAYER-AUTHORED</p><h2>Reasoning draft</h2></div><span class="draft-badge">EDITABLE</span></div><label for="reasoning-input">Explain what supports or challenges your leading hypothesis</label><textarea id="reasoning-input" rows="8" maxlength="2000" placeholder="Write your reasoning. Cite a released study from its viewer to insert an evidence reference."></textarea><div class="reasoning-foot"><span id="reasoning-count">0 / 2,000</span><button class="quiet-button" data-screen="investigations">Find released evidence <span aria-hidden="true">→</span></button></div></section>
+            </div>
+            <aside class="panel evidence-sidebar"><p class="eyebrow">RELEASED EVIDENCE</p><h2>Available to cite</h2><div id="evidence-list" class="evidence-list"></div><div class="panel-divider"></div><p class="helper-copy">Evidence is linked from the study viewer. A hypothesis association is organizational until the cited text is included here.</p></aside>
+          </div>
+          <div class="sticky-submit-bar"><div><strong>Review before submission</strong><span>The next screen shows the exact differential, reasoning, and closeout.</span></div><button class="primary-button" data-action="review-submission" id="review-submission">Review submission <span aria-hidden="true">→</span></button></div>
+        </section>
+
+        <section class="screen" id="screen-submission" data-page="submission" aria-labelledby="submission-title" hidden>
+          <div class="page-heading compact-heading"><div><p class="eyebrow">FINAL REVIEW</p><h1 id="submission-title">Review your submission</h1><p class="lede">This exact snapshot will be committed. The encounter will close at the displayed clinical time.</p></div><span class="locked-badge">LOCKS ON SUBMIT</span></div>
+          <div class="submission-grid">
+            <div class="submission-main">
+              <section class="panel reviewed-answer"><div class="panel-head"><div><p class="eyebrow">LEADING DIAGNOSIS</p><h2 id="review-leading">Not selected</h2></div><span class="rank-label">RANK 1</span></div><div class="review-differential" id="review-differential"></div></section>
+              <section class="panel reviewed-reasoning"><p class="eyebrow">REASONING TO BE SUBMITTED</p><blockquote id="review-reasoning">No reasoning text supplied.</blockquote><div class="review-evidence" id="review-evidence"></div></section>
+              <section class="panel closeout-panel"><div class="panel-head"><div><p class="eyebrow">CLOSEOUT PREVIEW</p><h2>What submission closes</h2></div><span id="review-clock" class="clock-mini">00:00</span></div><div id="closeout-list" class="closeout-list"></div><p class="closeout-note">Released studies remain in the frozen history. No later acquisition, processing, release, or wait can change this submission.</p></section>
+            </div>
+            <aside class="panel confirm-panel"><span class="confirm-icon" aria-hidden="true">✓</span><p class="eyebrow">READY TO FINALIZE?</p><h2>Submit final diagnosis</h2><p>Submitting ends this attempt. The diagnosis, ranked differential, reasoning, and evidence cutoff will be saved as a frozen record.</p><div class="confirm-clock"><span>Clinical time at submission</span><strong id="confirm-time">00:00</strong></div><button class="primary-button full-width danger-button" data-action="submit-final" id="submit-final">Submit final diagnosis <span aria-hidden="true">↗</span></button><button class="quiet-button full-width" data-screen="diagnosis">Return to edit</button></aside>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-debrief" data-page="debrief" aria-labelledby="debrief-title" hidden>
+          <div class="page-heading completed-heading"><div><p class="eyebrow">ATTEMPT COMPLETE</p><h1 id="debrief-title">Completed attempt</h1><p class="lede">The submitted snapshot and closeout remain available in local history.</p></div><span class="completed-badge"><i></i> Encounter closed</span></div>
+          <div class="debrief-grid">
+            <div class="debrief-main">
+              <section class="panel frozen-submission"><div class="panel-head"><div><p class="eyebrow">FROZEN SUBMISSION</p><h2 id="frozen-leading">Submitted diagnosis</h2></div><span class="locked-badge">IMMUTABLE</span></div><div id="frozen-differential" class="review-differential"></div><blockquote id="frozen-reasoning">No reasoning text supplied.</blockquote><div class="frozen-meta" id="frozen-meta"></div></section>
+              <section class="panel debrief-panel" id="debrief-panel"><div class="panel-head"><div><p class="eyebrow">FIXTURE FEEDBACK</p><h2>Reasoning review</h2></div><span class="fixture-label">SYNTHETIC RUBRIC</span></div><div id="debrief-content"></div></section>
+              <section class="panel debrief-unavailable" id="debrief-unavailable" hidden><span class="blocked-symbol" aria-hidden="true">!</span><div><p class="eyebrow">ASSESSMENT SERVICE</p><h2>Debrief temporarily unavailable</h2><p>Your submitted diagnosis and reasoning are saved above. Feedback is independent of the debrief and can still be submitted or skipped.</p><button class="secondary-button" data-action="retry-debrief">Retry debrief</button></div></section>
+              <section class="panel feedback-panel" id="feedback-panel"><div class="panel-head"><div><p class="eyebrow">HELP IMPROVE THIS FIXTURE</p><h2>How was this case?</h2></div><span class="zero-effect">No clock effect</span></div><p class="panel-intro">Optional feedback is stored separately from the frozen diagnosis.</p><div class="rating-row" role="group" aria-label="Case rating"><button data-rating="1" aria-label="1 out of 5">★</button><button data-rating="2" aria-label="2 out of 5">★</button><button data-rating="3" aria-label="3 out of 5">★</button><button data-rating="4" aria-label="4 out of 5">★</button><button data-rating="5" aria-label="5 out of 5">★</button><span id="rating-label">Choose a rating</span></div><label for="feedback-input">Comment (optional)</label><textarea id="feedback-input" rows="3" maxlength="500" placeholder="Share a note about the walkthrough…"></textarea><div class="button-row"><button class="quiet-button" data-action="skip-feedback">Skip feedback</button><button class="primary-button" data-action="submit-feedback" id="submit-feedback" disabled>Save feedback <span aria-hidden="true">↗</span></button></div><div id="feedback-status" class="feedback-status" aria-live="polite"></div></section>
+            </div>
+            <aside class="panel completion-sidebar"><span class="completion-mark" aria-hidden="true">✓</span><p class="eyebrow">ATTEMPT STATUS</p><h2>Saved to local history</h2><div id="closeout-summary"></div><button class="secondary-button full-width" data-screen="home">Return Home <span aria-hidden="true">→</span></button><button class="secondary-button full-width" data-action="start-replay">Start a separate attempt <span aria-hidden="true">↗</span></button></aside>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-help" data-page="help" aria-labelledby="help-title" hidden>
+          <div class="page-heading compact-heading"><div><p class="eyebrow">LOCAL BUILD NOTES</p><h1 id="help-title">Help and walkthrough controls</h1><p class="lede">These controls exist only to exercise the synthetic prototype states.</p></div><button class="secondary-button" data-action="close-help">Return to workbench</button></div>
+          <div class="help-grid">
+            <section class="panel help-panel"><p class="eyebrow">CLINICAL TIME</p><h2>When does time move?</h2><p>Only a committed Continue time action advances the Gate A clock. Reading, opening a released artifact, navigating, citing, and leaving feedback use zero clinical time.</p><p>Every result is labeled with the acquisition and release time supplied by the synthetic authority.</p></section>
+            <section class="panel help-panel"><p class="eyebrow">SYNTHETIC SCENARIOS</p><h2>Walkthrough controls</h2><p>Change these controls to reach blocked and recovery states. They do not connect to a provider.</p><label class="setting-row" for="dialogue-scenario"><span><strong>Patient dialogue</strong><small>Simulated local Luna outcome</small></span><select id="dialogue-scenario"><option value="unavailable">Unavailable (default)</option><option value="success">Available</option></select></label><label class="setting-row" for="order-response-scenario"><span><strong>Order response recovery</strong><small>One-shot response loss for the next order request</small></span><select id="order-response-scenario"><option value="none">Normal response</option><option value="before_commit">Lose response before commit</option><option value="after_commit">Lose response after commit</option></select></label><label class="setting-row toggle-row" for="debrief-scenario"><span><strong>Debrief renderer</strong><small>Feedback remains available during a failure</small></span><input id="debrief-scenario" type="checkbox"></label><div class="scenario-actions"><button class="secondary-button" data-action="save-scenario">Apply scenario</button><button class="quiet-button" data-action="close-help">Done</button></div></section>
+            <section class="panel help-panel"><p class="eyebrow">INFORMATION SOURCES</p><h2>Patient report and chart</h2><p>A statement from the patient is shown as patient-reported. The chart uses verified, measured, unknown, and not-measured labels when the fixture provides those states.</p><p>No values in Fixture-A are medical measurements.</p></section>
+            <section class="panel help-panel"><p class="eyebrow">ACCESSIBILITY</p><h2>Keyboard and text access</h2><p>Controls use native buttons, fields, and selects. The trace has a plotted and text representation. Status messages use live regions and the layout reflows for narrow screens and zoom.</p></section>
+          </div>
+        </section>
+      </main>
+
+      <details class="qa-drawer" id="qa-drawer">
+        <summary><span class="qa-pulse"></span> Synthetic authority controls <span class="qa-summary-note">test build</span></summary>
+        <div class="qa-content" id="qa-content"></div>
+      </details>
+
+      <div class="modal-backdrop" id="modal-backdrop" hidden>
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" id="modal-content"></section>
+      </div>
+      <div class="screen-reader-only" id="announcer" aria-live="polite" aria-atomic="true"></div>
+    </div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
