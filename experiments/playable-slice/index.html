@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Medical Diagnostics • Engineering Preview</title><link rel="stylesheet" href="/app.css"></head>
+<body><div class="shell">
+<aside class="sidebar">
+  <div class="brand"><span class="mark">+</span><div><strong>Medical Diagnostics</strong><small>Engineering preview · synthetic fixture</small></div></div>
+  <section class="panel auth"><h3>Luna authorization</h3><p id="auth-status">Checking connection…</p><button id="connect" class="secondary">Sign in with ChatGPT</button><button id="disconnect" class="ghost" hidden>Disconnect</button></section>
+  <section class="panel"><h3>Case library</h3><p class="muted">Every case is fictional and created only to test the software.</p><div id="catalog"></div><h3>Saved encounters</h3><div id="sessions"></div></section>
+  <p class="foot">Not medically valid. Do not use for clinical training or decisions. No treatments, external clinical data, or real diagnoses.</p>
+</aside>
+<main class="workspace">
+  <header><div><span class="eyebrow">WORKSPACE / ENGINEERING FIXTURE</span><h1>Patient encounter</h1><p id="encounter-meta" class="muted">Choose a fictional patient to begin.</p></div><div id="clock" class="time">t = 0.0 s</div></header>
+  <div id="notice" class="notice">Loading local case library…</div>
+  <div class="columns">
+    <section class="card"><div class="card-head"><h2>Interview</h2><span class="tag">Luna-only</span></div><div class="card-body">
+      <p class="muted">Ask this fictional patient about prior episodes. New turns require an authorized Luna session; unsupported medical claims are rejected.</p>
+      <div id="transcript" class="transcript"></div>
+      <form id="ask-form" class="inline"><label for="question" class="sr-only">Ask patient</label><input id="question" maxlength="500" placeholder="Ask about medical history or symptoms…" required><button type="submit">Ask</button></form>
+    </div></section>
+    <section class="card"><div class="card-head"><h2>Investigations</h2><span class="tag">Case clock</span></div><div class="card-body">
+      <p class="muted">Both test outputs are software fixtures. The T viewer is a display prototype, not an ECG or medical evidence.</p>
+      <div class="testitem"><div><strong>A — scalar observation</strong><small>Acquired at 5s · released at 8s</small></div><button id="order-a" class="secondary">Order A</button></div>
+      <div class="testitem"><div><strong>T — synthetic signal display</strong><small>Generated software fixture · released after 9s</small></div><button id="order-t" class="secondary">Order T</button></div>
+      <div class="timectrl"><button id="wait-1" class="ghost">+1 second</button><button id="wait-5" class="ghost">+5 seconds</button><button id="wait-9" class="secondary">Advance to 9s</button></div>
+      <div id="orders" class="orders"></div>
+      <div id="artifact" class="artifact" hidden><h3>Artifact viewer</h3><div id="plot" class="signal-view" aria-label="Synthetic signal display"></div><pre id="artifact-data"></pre><button id="interpret" class="ghost">Request reference interpretation</button><div id="interpretation"></div></div>
+    </div></section>
+  </div>
+  <section class="card diagnosis"><div class="card-head"><h2>Diagnostic reasoning</h2><span class="tag">Fictional labels</span></div><div class="card-body">
+    <p class="muted">These are intentionally meaningless identifiers. The exercise tests workflow, not clinical knowledge.</p>
+    <form id="diagnosis-form"><div class="two">
+      <label>Leading diagnosis<select id="leading" required><option value="" selected>Select a fictional label</option><option value="DX-A">DX-A</option><option value="DX-B">DX-B</option></select></label>
+      <label>Alternative diagnosis<select id="alternative"><option value="" selected>None</option><option value="DX-A">DX-A</option><option value="DX-B">DX-B</option></select></label>
+    </div><label>Reasoning (optional)<textarea id="reasoning" rows="3" maxlength="1200" placeholder="What did the released evidence show?"></textarea></label><button type="submit">Submit diagnosis</button></form>
+    <div id="debrief" hidden></div>
+  </div></section>
+</main></div><script type="module" src="/app.js"></script></body></html>
