@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -17,6 +18,7 @@ from workers import StubWorker, WorkerCandidate
 MAX_CLINICAL_TIME_MS = 2**31 - 1
 MAX_SAME_TIME_EVENTS = 1000
 SCHEMA_VERSION = 1
+DISPLAY_PREVIEW_LEADS = ("I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6")
 FIXTURE_VERSIONS = {
     "model_version": "fixture-scalar-model-v1",
     "adapter_version": "fixture-adapter-v1",
@@ -743,10 +745,11 @@ class SQLiteAuthority:
             else:
                 validated_payload = {
                     "samples": list(candidate_result["samples"]),
-                    "interpretation": candidate_result["interpretation"],
                     "units": "fixture-unit",
                     "media_available": candidate_result.get("media_available", True),
                 }
+                if "display_waveform" in candidate_result:
+                    validated_payload["display_waveform"] = dict(candidate_result["display_waveform"])
                 if validation["outcome"] == "limited":
                     validated_payload["sample_offsets"] = list(candidate_result["sample_offsets"])
                 else:
@@ -849,11 +852,15 @@ class SQLiteAuthority:
         if acquisition["kind"] == "trace":
             expected = [sample["value"] for sample in acquisition["samples"]]
             sample_values = result.get("samples")
-            if not isinstance(sample_values, list) or not isinstance(result.get("interpretation"), str):
+            if not isinstance(sample_values, list):
                 return {"policy_version": order["validation_policy_version"], "outcome": "reject", "reason": "trace_binding_mismatch"}
             expected_interpretation = "supports DX-A" if quality == "valid" else "partial trace only"
-            if result["interpretation"] != expected_interpretation:
+            candidate_interpretation = result.get("interpretation")
+            if candidate_interpretation is not None and candidate_interpretation != expected_interpretation:
                 return {"policy_version": order["validation_policy_version"], "outcome": "reject", "reason": "unsupported_interpretation"}
+            display_waveform = result.get("display_waveform")
+            if display_waveform is not None and not SQLiteAuthority._valid_display_waveform(display_waveform):
+                return {"policy_version": order["validation_policy_version"], "outcome": "reject", "reason": "invalid_display_waveform"}
             if quality == "valid":
                 if (
                     sample_values != expected
@@ -880,6 +887,43 @@ class SQLiteAuthority:
             "outcome": "limited" if quality == "limited" else "pass",
             "input_hash": acquisition["input_hash"],
         }
+
+    @staticmethod
+    def _valid_display_waveform(value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        expected_keys = {
+            "kind", "sample_rate_hz", "duration_seconds", "paper_speed_mm_s",
+            "gain_mm_per_fixture_mv", "units", "lead_order", "leads",
+        }
+        if set(value) != expected_keys:
+            return False
+        if (
+            value.get("kind") != "display_only_synthetic_fixture"
+            or value.get("sample_rate_hz") != 100
+            or value.get("duration_seconds") != 10
+            or value.get("paper_speed_mm_s") != 25
+            or value.get("gain_mm_per_fixture_mv") != 10
+            or value.get("units") != "fixture-mV"
+            or value.get("lead_order") != list(DISPLAY_PREVIEW_LEADS)
+        ):
+            return False
+        leads = value.get("leads")
+        if not isinstance(leads, Mapping) or set(leads) != set(DISPLAY_PREVIEW_LEADS):
+            return False
+        for lead in DISPLAY_PREVIEW_LEADS:
+            samples = leads[lead]
+            if not isinstance(samples, list) or len(samples) != 1000:
+                return False
+            if any(
+                isinstance(sample, bool)
+                or not isinstance(sample, (int, float))
+                or not math.isfinite(sample)
+                or abs(sample) > 2
+                for sample in samples
+            ):
+                return False
+        return True
 
     @staticmethod
     def _acquisition_hash(play: Mapping[str, Any], acquisition: Mapping[str, Any]) -> str:
@@ -1461,17 +1505,34 @@ class SQLiteAuthority:
             if order["kind"] == "trace":
                 return ArtifactAccess(
                     "available",
-                    {"asset_id": "primary", "representation": "synthetic-trace", "samples": list(result["samples"]), "units": result["units"]},
+                    {
+                        "asset_id": "primary",
+                        "representation": "synthetic-12-channel-display-preview" if result.get("display_waveform") else "synthetic-trace",
+                        "samples": list(result["samples"]),
+                        "units": result["units"],
+                        **({"display_waveform": dict(result["display_waveform"])} if result.get("display_waveform") else {}),
+                    },
                 )
             return ArtifactAccess("available", {"asset_id": "primary", "representation": "synthetic-scalar", "value": result["value"], "units": result["units"]})
         if asset_id == "accessible-text":
             if order["kind"] == "trace":
                 offsets = result.get("sample_offsets", [0, 1, 2][: len(result["samples"])])
+                if result.get("display_waveform"):
+                    display = result["display_waveform"]
+                    text = (
+                        "Software-generated 12-channel display fixture; not an ECG or medical evidence. "
+                        f"Duration {display['duration_seconds']} seconds; sample rate {display['sample_rate_hz']} Hz; "
+                        f"display scale {display['paper_speed_mm_s']} mm/s and "
+                        f"10 mm per fixture-mV. Channels: " + ", ".join(display["lead_order"]) + ". "
+                        "The signal shape and channel relationships are arbitrary and have no diagnostic meaning."
+                    )
+                else:
+                    text = result.get("accessible_text") or "Trace samples: " + ", ".join(map(str, result["samples"])) + f" {result['units']}. This is a fictional software fixture, not medical evidence."
                 return ArtifactAccess(
                     "available",
                     {
                         "asset_id": "accessible-text",
-                        "text": result.get("accessible_text") or "Trace samples: " + ", ".join(map(str, result["samples"])) + f" {result['units']}.",
+                        "text": text,
                         "samples": list(result["samples"]),
                         "sample_offsets": list(offsets),
                         "units": result["units"],

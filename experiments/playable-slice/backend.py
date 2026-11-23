@@ -30,6 +30,10 @@ def emit(payload):
 
 class LunaPipe:
     def complete(self, purpose, context):
+        # Fixture-A's internal reference assessment contains its scoring target.
+        # Do not send that diagnosis-bearing payload to a pre-submission model.
+        if purpose == "explanation":
+            return {"status": "unavailable"}
         emit({"type": "model_request", "purpose": purpose, "context": context})
         raw = sys.stdin.readline()
         if not raw:
@@ -64,6 +68,40 @@ def known_session(playthrough_id):
 
 def to_dict(obj):
     return asdict(obj)
+
+
+def player_assessment(_assessment):
+    return {
+        "status": "unavailable",
+        "summary": "This synthetic software fixture has no clinical reference interpretation.",
+        "limitations": "The displayed values are fictional and have no diagnostic meaning.",
+    }
+
+
+def player_projection(projection):
+    value = to_dict(projection)
+    data = value.get("data")
+    if not isinstance(data, dict):
+        return value
+    for result in data.get("released_results", {}).values():
+        if isinstance(result, dict):
+            for key in ("interpretation", "reference_key", "reference_differential", "supported_assertions"):
+                result.pop(key, None)
+    for aid in data.get("interpretation_aids", []):
+        if isinstance(aid, dict):
+            aid["assessment"] = player_assessment(aid.get("assessment"))
+            aid["explanation"] = None
+            aid["explanation_status"] = "unavailable"
+    return value
+
+
+def player_receipt(receipt):
+    value = to_dict(receipt)
+    data = value.get("data")
+    if isinstance(data, dict) and "assessment" in data:
+        data["assessment"] = player_assessment(data["assessment"])
+        data.pop("explanation", None)
+    return value
 
 
 def ensure_fixture(authority):
@@ -112,7 +150,7 @@ def handle(request):
                 entries.append({"playthrough_id": play_id, "case_id": case_id,
                                 "status": p.status, "elapsed_ms": p.elapsed_ms})
         selected = request.get("playthrough_id")
-        projection = (to_dict(authority.project(LEARNER, selected))
+        projection = (player_projection(authority.project(LEARNER, selected))
                       if known_session(selected) else None)
         return {"status": "ok", "catalog": to_dict(cases), "sessions": entries,
                 "projection": projection}
@@ -125,12 +163,12 @@ def handle(request):
             "start_playthrough", {"playthrough_id": play_id},
         ))
         if result.status != "committed":
-            return to_dict(result)
+            return player_receipt(result)
         with sqlite3.connect(DB) as con:
             con.execute("INSERT INTO local_sessions VALUES (?, ?)", (play_id, "Fixture-A"))
             con.commit()
         return {"status": "committed", "playthrough_id": play_id,
-                "projection": to_dict(authority.project(LEARNER, play_id))}
+                "projection": player_projection(authority.project(LEARNER, play_id))}
     play_id = request.get("playthrough_id")
     if not known_session(play_id):
         return {"status": "not_found"}
@@ -160,8 +198,8 @@ def handle(request):
     result = authority.execute(LEARNER, Command(command_id, play_id, revision, kind, data))
     if kind == "wait" and result.status == "committed":
         release_due(authority, play_id)
-    return {"receipt": to_dict(result),
-            "projection": to_dict(authority.project(LEARNER, play_id))}
+    return {"receipt": player_receipt(result),
+            "projection": player_projection(authority.project(LEARNER, play_id))}
 
 
 def main():

@@ -18,12 +18,12 @@
       <form id="ask-form" class="inline"><label for="question" class="sr-only">Ask patient</label><input id="question" maxlength="500" placeholder="Ask about medical history or symptoms…" required><button type="submit">Ask</button></form>
     </div></section>
     <section class="card"><div class="card-head"><h2>Investigations</h2><span class="tag">Case clock</span></div><div class="card-body">
-      <p class="muted">Both test outputs are fictional quantities, not blood tests or authentic ECG recordings.</p>
+      <p class="muted">Both test outputs are software fixtures. The T viewer is a display prototype, not an ECG or medical evidence.</p>
       <div class="testitem"><div><strong>A — scalar observation</strong><small>Acquired at 5s · released at 8s</small></div><button id="order-a" class="secondary">Order A</button></div>
-      <div class="testitem"><div><strong>T — synthetic waveform</strong><small>Sampled at 5s · internally released after 9s</small></div><button id="order-t" class="secondary">Order T</button></div>
+      <div class="testitem"><div><strong>T — synthetic signal display</strong><small>Generated software fixture · released after 9s</small></div><button id="order-t" class="secondary">Order T</button></div>
       <div class="timectrl"><button id="wait-1" class="ghost">+1 second</button><button id="wait-5" class="ghost">+5 seconds</button><button id="wait-9" class="secondary">Advance to 9s</button></div>
       <div id="orders" class="orders"></div>
-      <div id="artifact" class="artifact" hidden><h3>Artifact viewer</h3><canvas id="plot" width="550" height="170" aria-label="Fictional trace: values shown in text below"></canvas><pre id="artifact-data"></pre><button id="interpret" class="ghost">Request reference interpretation</button><div id="interpretation"></div></div>
+      <div id="artifact" class="artifact" hidden><h3>Artifact viewer</h3><div id="plot" class="signal-view" aria-label="Synthetic signal display"></div><pre id="artifact-data"></pre><button id="interpret" class="ghost">Request reference interpretation</button><div id="interpretation"></div></div>
     </div></section>
   </div>
   <section class="card diagnosis"><div class="card-head"><h2>Diagnostic reasoning</h2><span class="tag">Fictional labels</span></div><div class="card-body">

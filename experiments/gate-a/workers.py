@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Mapping
 
 
@@ -42,6 +43,45 @@ class StubWorker:
     def offer(self, candidate: WorkerCandidate) -> None:
         self._candidates[self._candidate_key(candidate)] = candidate
 
+    @staticmethod
+    def _display_waveform() -> dict[str, Any]:
+        """Return an arbitrary display fixture, not a simulated or clinical ECG."""
+        lead_order = ["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]
+        gains = {
+            "I": 0.78, "II": 1.0, "III": 0.48, "aVR": -0.62,
+            "aVL": 0.26, "aVF": 0.64, "V1": -0.34, "V2": 0.42,
+            "V3": 0.70, "V4": 0.92, "V5": 0.84, "V6": 0.68,
+        }
+        sample_rate_hz = 100
+        sample_count = 1000
+        beat_times = [0.6 + index for index in range(10)]
+        base_values: list[float] = []
+        for sample_index in range(sample_count):
+            time_s = sample_index / sample_rate_hz
+            signal = 0.018 * math.sin(2 * math.pi * 7 * time_s)
+            for beat in beat_times:
+                delta = time_s - beat
+                signal += 0.12 * math.exp(-((delta + 0.18) / 0.045) ** 2)
+                signal -= 0.15 * math.exp(-((delta + 0.025) / 0.012) ** 2)
+                signal += 0.90 * math.exp(-((delta) / 0.014) ** 2)
+                signal -= 0.20 * math.exp(-((delta - 0.025) / 0.014) ** 2)
+                signal += 0.25 * math.exp(-((delta - 0.28) / 0.085) ** 2)
+            base_values.append(signal)
+        leads = {
+            lead: [round(value * gains[lead], 4) for value in base_values]
+            for lead in lead_order
+        }
+        return {
+            "kind": "display_only_synthetic_fixture",
+            "sample_rate_hz": sample_rate_hz,
+            "duration_seconds": 10,
+            "paper_speed_mm_s": 25,
+            "gain_mm_per_fixture_mv": 10,
+            "units": "fixture-mV",
+            "lead_order": lead_order,
+            "leads": leads,
+        }
+
     def get_candidate(
         self,
         playthrough_id: str,
@@ -66,8 +106,8 @@ class StubWorker:
         else:
             result = {
                 "samples": [sample["value"] for sample in acquisition["samples"]],
-                "interpretation": "supports DX-A",
                 "units": "fixture-unit",
+                "display_waveform": self._display_waveform(),
             }
         return WorkerCandidate(
             playthrough_id=playthrough_id,

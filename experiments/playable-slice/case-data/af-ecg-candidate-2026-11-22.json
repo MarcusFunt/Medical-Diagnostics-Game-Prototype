@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "case_id": "AF-ECG-CANDIDATE-01",
+  "case_version": "draft-0.1",
+  "status": "draft_not_playable",
+  "active_in_game": false,
+  "intended_role": "learner",
+  "intended_scope": "single diagnosis-focused educational case candidate",
+  "source_evidence": [
+    {
+      "source_id": "ESC-AF-2024",
+      "title": "2024 ESC Guidelines for the management of atrial fibrillation",
+      "url": "https://academic.oup.com/eurheartj/article/45/36/3314/7738779",
+      "use": "Supports the candidate rhythm documentation concept: atrial fibrillation is reflected on surface ECG by absent discernible regular P waves and irregular ventricular activation."
+    },
+    {
+      "source_id": "ACC-AHA-ECG-2001",
+      "title": "ACC/AHA Clinical Competence Statement on Electrocardiography and Ambulatory Electrocardiography",
+      "url": "https://www.ahajournals.org/doi/pdf/10.1161/circ.104.25.3169",
+      "use": "Technical display reference for standard ECG paper speed (25 mm/s) and gain (10 mm/mV). Does not validate any generated waveform."
+    }
+  ],
+  "case_proposal": {
+    "authoring_status": "fictional scenario proposal; every patient-specific fact and value below requires qualified clinical review",
+    "initial_disclosure": "The patient reports episodes of a rapid, uneven heartbeat.",
+    "question_disclosures": [
+      {
+        "fact_id": "symptom-onset",
+        "disclosure": "The current episode began about 40 minutes before the encounter.",
+        "status": "proposed synthetic fact; not sourced"
+      },
+      {
+        "fact_id": "prior-episode",
+        "disclosure": "The patient recalls one brief similar episode several weeks earlier.",
+        "status": "proposed synthetic fact; not sourced"
+      },
+      {
+        "fact_id": "associated-symptoms",
+        "disclosure": "The patient denies fainting and chest discomfort.",
+        "status": "proposed synthetic fact; not sourced"
+      }
+    ],
+    "timeline": [
+      {
+        "offset_seconds": 0,
+        "event": "Encounter starts; current symptom is active.",
+        "status": "software scenario timing, not a clinical claim"
+      },
+      {
+        "offset_seconds": 30,
+        "event": "Onset and prior-episode disclosures become available if asked.",
+        "status": "software scenario timing, not a clinical claim"
+      },
+      {
+        "offset_seconds": 60,
+        "event": "A pulse observation may be ordered.",
+        "status": "proposed; review required"
+      },
+      {
+        "offset_seconds": 90,
+        "event": "A 12-lead ECG may be released after the authority-controlled acquisition.",
+        "status": "proposed; review and an approved ECG asset required"
+      }
+    ],
+    "investigations": [
+      {
+        "item_id": "P",
+        "name": "Pulse observation",
+        "proposed_value": 118,
+        "unit": "beats/min",
+        "status": "unreviewed synthetic proposal; do not present as a medical reference value"
+      },
+      {
+        "item_id": "ECG",
+        "name": "12-lead electrocardiogram",
+        "proposed_reference_features": [
+          "ECG-documented rhythm",
+          "No discernible regular P waves",
+          "Irregular ventricular activation"
+        ],
+        "source_ids": ["ESC-AF-2024"],
+        "asset_status": "no clinical waveform attached; the in-app synthetic display fixture is not this case's evidence"
+      }
+    ],
+    "reference_evidence": {
+      "candidate_diagnosis": "atrial fibrillation",
+      "status": "source-supported candidate concept; case-level truth not reviewed",
+      "source_ids": ["ESC-AF-2024"],
+      "differential_and_scoring": "not authored pending qualified reviewer input"
+    }
+  },
+  "release_gate": {
+    "clinical_review_status": "pending",
+    "reviewer_required": "qualified clinician with ECG interpretation experience",
+    "conditions_before_player_release": [
+      "Review all patient-specific symptoms, values, timing, and differential for internal coherence.",
+      "Attach a rights-cleared ECG artifact or approve an explicitly synthetic, clinically reviewed waveform.",
+      "Verify the ECG supports the intended reference diagnosis and define competing diagnoses and scoring.",
+      "Approve disclosure wording and an evidence-linked debrief.",
+      "Record reviewer identity/role, date, scope, and any limitations."
+    ],
+    "until_gate_passes": "Keep this file out of the playable catalog. Do not describe it as clinically grounded, validated, or suitable for teaching or clinical decisions."
+  }
+}
+
